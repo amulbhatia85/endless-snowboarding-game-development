@@ -1,0 +1,8 @@
+{
+  "appId": "com.afterglow.snowboard",
+  "appName": "Afterglow",
+  "webDir": "dist",
+  "android": {
+    "backgroundColor": "#102032"
+  }
+}
