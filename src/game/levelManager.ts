@@ -110,6 +110,8 @@ export class LevelManager<T = never> {
     storage?: ProgressStorage;
     seed?: number;
     validateCheckpoint?: (value: unknown) => value is T;
+    /** Forces the starting level (local preview via ?level=N and tests). */
+    initialLevel?: number;
   } = {}) {
     this.storage = options.storage ?? browserStorage();
     this.validateCheckpoint = options.validateCheckpoint ?? ((_value: unknown): _value is T => false);
@@ -119,6 +121,16 @@ export class LevelManager<T = never> {
       completedThrough: 0, levelScore: 0, runScore: 0, lifetimeScore: 0, checkpoint: null,
     };
     this.restore();
+    if (options.initialLevel !== undefined) {
+      if (!positiveInteger(options.initialLevel)) throw new RangeError('initialLevel must be a positive safe integer.');
+      this.progress.currentLevel = options.initialLevel;
+      this.progress.unlockedThrough = Math.max(this.progress.unlockedThrough, options.initialLevel);
+      this.progress.completedThrough = options.initialLevel - 1;
+      this.progress.levelScore = 0;
+      this.progress.runScore = 0;
+      this.progress.checkpoint = null;
+      this.persist();
+    }
     this.configuration = generateLevel(this.progress.currentLevel, this.progress.journeySeed);
   }
 

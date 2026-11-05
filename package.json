@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "test:levels": "node tests/levels.test.mjs",
     "test:terrain": "node tests/terrain.test.mjs",
-    "test:obstacles": "node tests/obstacles.test.mjs"
+    "test:obstacles": "node tests/obstacles.test.mjs",
+    "test:environment": "node tests/environment.test.mjs"
   },
   "dependencies": {
     "@capacitor-community/admob": "^8.3.0",

@@ -2,6 +2,7 @@ import { ObstaclePlanner, validPlacementMetadata, type PlacementMetadata, type P
 import { OBSTACLE_REGISTRY, swingingLogPose } from './obstacleRegistry';
 import { flipProgress } from './riderPhysics';
 import { BICYCLE_PHYSICS, TerrainWorld, type TerrainOrigin } from './terrain';
+import { EnvironmentManager, decorationOverlapsGameplay, type EnvironmentView, type Palette } from './environment';
 import { createLevelRandom, LevelManager } from './levelManager';
 
 import { BIKES, RIDERS, MISSIONS, MISSION_BONUS } from './progression';
@@ -119,11 +120,6 @@ interface Rider {
   fallingInto?: Obstacle;
 }
 
-interface FinishHouse {
-  x: number;
-  groundY: number;
-}
-
 interface RunState {
   rider: Rider;
   levelIndex: number;
@@ -172,13 +168,8 @@ interface RunState {
   crashReason: string;
 }
 
-// Phase 1 keeps the two existing visual/gameplay profiles. New environment
-// configuration is exposed by LevelManager for later rendering integration.
-const EXISTING_LEVEL_PROFILES = [
-  { snowfall: 1, winterTone: 0, terrainScale: 1, gapChance: 0.12, rampChance: 0.09 },
-  { snowfall: 0.38, winterTone: 1, terrainScale: 1.13, gapChance: 0.17, rampChance: 0.13 },
-] as const;
-const existingProfile = (index: number) => EXISTING_LEVEL_PROFILES[Math.min(index, 1)];
+// Phase 4: all visual theming (palettes, parallax, weather, decorations) now
+// lives in EnvironmentManager; the engine only consumes its Palette output.
 
 function isRunCheckpoint(value: unknown): value is RunState {
   if (!value || typeof value !== 'object') return false;
@@ -221,17 +212,9 @@ function isRunCheckpoint(value: unknown): value is RunState {
   return [run.particles, run.popups, run.trail].every((items) => Array.isArray(items) && items.length === 0);
 }
 
-interface Palette {
-  top: string;
-  horizon: string;
-  far: string;
-  middle: string;
-  near: string;
-  snow: string;
-  snowShade: string;
-  glow: string;
-  moon: string;
-  night: number;
+interface FinishHouse {
+  x: number;
+  groundY: number;
 }
 
 const TAU = Math.PI * 2;
@@ -244,15 +227,6 @@ const WHEEL_CONTACT_Y = 5;
 const FLIP_HOLD_SECONDS = BICYCLE_PHYSICS.flipHoldSeconds;
 const START_PAUSE = 1;
 const START_ROLLOUT = 2.2;
-const PALETTE_STOPS: Array<{ at: number; palette: Palette }> = [
-  { at: 0, palette: { top: '#091726', horizon: '#263852', far: '#344c67', middle: '#405875', near: '#54718d', snow: '#d6e5eb', snowShade: '#a5c0d0', glow: '#819db7', moon: '#edf2ef', night: 1 } },
-  { at: 0.14, palette: { top: '#1b3550', horizon: '#eaa18e', far: '#617991', middle: '#71859a', near: '#8197a8', snow: '#f4e6de', snowShade: '#bdcbd3', glow: '#ffd1af', moon: '#fff1d5', night: 0.48 } },
-  { at: 0.34, palette: { top: '#6da7c4', horizon: '#d8e5df', far: '#94b7c9', middle: '#b3cbd5', near: '#cad9df', snow: '#f7fbfa', snowShade: '#cfdee4', glow: '#fff0d5', moon: '#ffffff', night: 0 } },
-  { at: 0.53, palette: { top: '#547a9d', horizon: '#f1d1b0', far: '#6c88a0', middle: '#879caf', near: '#a4b7c4', snow: '#f4f0e8', snowShade: '#c4d3d9', glow: '#ffe0b5', moon: '#fff4df', night: 0.06 } },
-  { at: 0.68, palette: { top: '#253f5c', horizon: '#e28d7a', far: '#465e78', middle: '#596e84', near: '#718496', snow: '#ece5e1', snowShade: '#b7c7d1', glow: '#ffbd9b', moon: '#fff0d9', night: 0.32 } },
-  { at: 0.84, palette: { top: '#0d1a2c', horizon: '#35445b', far: '#334a65', middle: '#435b75', near: '#59728b', snow: '#dae5e9', snowShade: '#aabfce', glow: '#b5c4d4', moon: '#f5f4eb', night: 0.92 } },
-  { at: 1, palette: { top: '#091726', horizon: '#263852', far: '#344c67', middle: '#405875', near: '#54718d', snow: '#d6e5eb', snowShade: '#a5c0d0', glow: '#819db7', moon: '#edf2ef', night: 1 } },
-];
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
@@ -276,36 +250,6 @@ function colorMix(a: string, b: string, amount: number): string {
 function alphaColor(color: string, alpha: number): string {
   const channels = color.match(/\d+/g)?.slice(0, 3) ?? ['255', '255', '255'];
   return `rgba(${channels[0]}, ${channels[1]}, ${channels[2]}, ${alpha})`;
-}
-
-function getPalette(phase: number): Palette {
-  const value = ((phase % 1) + 1) % 1;
-  let left = PALETTE_STOPS[0];
-  let right = PALETTE_STOPS[PALETTE_STOPS.length - 1];
-
-  for (let index = 0; index < PALETTE_STOPS.length - 1; index += 1) {
-    const current = PALETTE_STOPS[index];
-    const next = PALETTE_STOPS[index + 1];
-    if (value >= current.at && value <= next.at) {
-      left = current;
-      right = next;
-      break;
-    }
-  }
-
-  const mix = (value - left.at) / (right.at - left.at || 1);
-  return {
-    top: colorMix(left.palette.top, right.palette.top, mix),
-    horizon: colorMix(left.palette.horizon, right.palette.horizon, mix),
-    far: colorMix(left.palette.far, right.palette.far, mix),
-    middle: colorMix(left.palette.middle, right.palette.middle, mix),
-    near: colorMix(left.palette.near, right.palette.near, mix),
-    snow: colorMix(left.palette.snow, right.palette.snow, mix),
-    snowShade: colorMix(left.palette.snowShade, right.palette.snowShade, mix),
-    glow: colorMix(left.palette.glow, right.palette.glow, mix),
-    moon: colorMix(left.palette.moon, right.palette.moon, mix),
-    night: lerp(left.palette.night, right.palette.night, mix),
-  };
 }
 
 export class SnowGameEngine {
@@ -339,12 +283,27 @@ export class SnowGameEngine {
     return this.graphicsQuality === 'balanced' || (this.android && this.graphicsQuality === 'auto');
   }
 
-  readonly levels = new LevelManager<RunState>({ validateCheckpoint: isRunCheckpoint });
+  readonly levels: LevelManager<RunState>;
   private checkpointElapsed = 0;
   private terrain?: TerrainWorld;
   private readonly obstaclePlanner = new ObstaclePlanner();
   private obstacleDebug = false;
   private obstacleRejections: PlacementRejection[] = [];
+
+  // Phase 4 — dynamic environment & weather. Rendering of skies, parallax,
+  // clouds, fog, weather and decorations is delegated to this manager; the
+  // engine keeps terrain shape, obstacles, collisions and physics untouched.
+  private readonly environment = new EnvironmentManager();
+  private readonly environmentView: EnvironmentView = {
+    width: 0, height: 0, cameraX: 0, cameraY: 0, clock: 0, phase: 0, riderX: 0,
+    isMenu: false, lighter: false, groundAt: (x: number) => this.terrainAt(x),
+  };
+  private lastEnvironmentCameraX = 0;
+  private readonly decorationReserved = (x: number, halfWidth: number): boolean => {
+    const run = this.run;
+    if (!run) return false;
+    return decorationOverlapsGameplay(x, halfWidth, run.objects, run.houses);
+  };
 
   setObstacleDebug(enabled: boolean): void {
     this.obstacleDebug = enabled;
@@ -378,7 +337,24 @@ export class SnowGameEngine {
     this.canvas = canvas;
     this.context = context;
     this.callbacks = callbacks;
-    this.obstacleDebug = new URLSearchParams(window.location?.search ?? '').get('debugObstacles') === '1';
+    const parameters = new URLSearchParams(window.location?.search ?? '');
+    this.obstacleDebug = parameters.get('debugObstacles') === '1';
+    // Local preview hook: ?level=N starts straight at that level (progress is
+    // kept in memory only so real saves are never touched).
+    const previewLevel = Number(parameters.get('level'));
+    const preview = Number.isSafeInteger(previewLevel) && previewLevel >= 1 && previewLevel <= 9999;
+    const previewStorage = preview
+      ? (() => {
+        const values = new Map<string, string>();
+        return { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); } };
+      })()
+      : undefined;
+    this.levels = new LevelManager<RunState>({
+      validateCheckpoint: isRunCheckpoint,
+      initialLevel: preview ? previewLevel : undefined,
+      storage: previewStorage,
+    });
+    this.environment.setLevel(this.levels.current);
     const checkpoint = this.levels.checkpoint;
     if (checkpoint && checkpoint.levelIndex + 1 === this.levels.current.number
       && Math.floor(checkpoint.distance / 10) + checkpoint.coins * 125 + checkpoint.bonus === this.levels.savedRunScore
@@ -417,7 +393,7 @@ export class SnowGameEngine {
     this.levels.restartAttempt();
     this.obstacleRejections = [];
     const level = this.levels.current;
-    const profile = existingProfile(level.number - 1);
+    this.environment.setLevel(level);
     const x = 0;
     this.run = null;
     const origins = [{ level: level.number, x: 0, offset: 0 }];
@@ -431,8 +407,8 @@ export class SnowGameEngine {
       sceneTime: 0,
       sceneStartSpeed: 0,
       riderOpacity: 1,
-      winterMix: profile.winterTone,
-      snowRate: profile.snowfall,
+      winterMix: 0,
+      snowRate: this.environment.snowIntensity,
       houses: [],
       terrainOrigins: origins,
       hazardClearUntil: 640,
@@ -554,6 +530,7 @@ export class SnowGameEngine {
   returnToMenu(): void {
     if (this.run && !this.run.over) this.syncLevelScore(this.run);
     this.levels.restartAttempt();
+    this.environment.setLevel(this.levels.current);
     this.held = false;
     this.jumpQueued = false;
     this.parked = false;
@@ -623,7 +600,6 @@ export class SnowGameEngine {
   private readonly frame = (timestamp: number) => {
     const delta = this.lastFrame === 0 ? 0 : clamp((timestamp - this.lastFrame) / 1000, 0, 0.1);
     this.lastFrame = timestamp;
-    this.snowClock += delta * (this.status === 'menu' ? 1 : this.run?.snowRate ?? 1);
 
     if (this.status === 'playing' && this.run) {
       // Keep collision steps small even when Android delivers frames slowly.
@@ -646,6 +622,18 @@ export class SnowGameEngine {
       while (origins.length > 2 && origins[1].x < terrainCamera - this.width * 2 - 640) origins.shift();
     }
     this.terrain?.maintain(terrainCamera, this.width);
+    // Environment and weather advance every frame (all statuses) so the menu
+    // stays alive and level cross-fades run even while the world is parked.
+    this.environment.update(delta, {
+      cameraX: terrainCamera,
+      cameraDx: terrainCamera - this.lastEnvironmentCameraX,
+      width: this.width,
+      height: this.height,
+      storm: this.stormLevel(),
+      lighter: this.lighterGraphics,
+      groundAt: this.environmentView.groundAt,
+    });
+    this.lastEnvironmentCameraX = terrainCamera;
     this.draw();
     if (this.callbacks.onFrame) {
       const rider = this.run?.rider;
@@ -664,7 +652,6 @@ export class SnowGameEngine {
   };
 
   private lastNight = 0;
-  private snowClock = 0;
 
   private stormLevel(): number {
     return Math.pow(Math.max(0, Math.sin(this.clock * 0.12 - 0.8)), 5);
@@ -813,7 +800,7 @@ export class SnowGameEngine {
     rider.flipElapsed = undefined;
     rider.angularVelocity = 0;
     run.shake = Math.max(run.shake, 1.6);
-    this.burst(run, rider.x - 8, rider.y + 2, 9, '#eff8fa', 95, -65);
+    this.burst(run, rider.x - 8, rider.y + 2, 9, this.environment.burstColors.soft, 95, -65);
     this.emit({ type: 'jump' });
   }
 
@@ -1039,15 +1026,18 @@ export class SnowGameEngine {
         this.levels.markSafeHouseReached();
         run.levelPhase = 'celebrating';
         run.sceneTime = 0;
+        // Cross-fade the whole environment while the rider is inside the
+        // safe house, finishing as they ride out into the new level.
+        const upcoming = this.levels.getLevel(this.levels.current.number + 1);
+        this.environment.transitionTo(
+          upcoming,
+          this.levels.current.transitions.end.completionSeconds + upcoming.transitions.start.seconds,
+          rider.x,
+        );
         this.callbacks.onHud(this.makeHud(run));
       }
     } else if (run.levelPhase === 'celebrating') {
       rider.speed = 0;
-      const nextConfiguration = this.levels.getLevel(this.levels.current.number + 1);
-      const nextProfile = existingProfile(nextConfiguration.number - 1);
-      const blend = 1 - Math.exp(-1.4 * delta);
-      run.winterMix = lerp(run.winterMix, nextProfile.winterTone, blend);
-      run.snowRate = lerp(run.snowRate, nextProfile.snowfall, blend);
       if (run.sceneTime >= this.levels.current.transitions.end.completionSeconds) {
         this.syncLevelScore(run);
         const nextLevel = this.levels.advanceAfterTransition();
@@ -1061,8 +1051,8 @@ export class SnowGameEngine {
         run.levelPhase = 'exiting';
         run.sceneTime = 0;
         run.riderOpacity = 0;
-        run.winterMix = nextProfile.winterTone;
-        run.snowRate = nextProfile.snowfall;
+        run.winterMix = 0;
+        run.snowRate = this.environment.snowIntensity;
         run.seed = nextLevel.seed;
         run.nextStatAt = run.elapsed + 9;
         this.callbacks.onHud(this.makeHud(run));
@@ -1080,6 +1070,7 @@ export class SnowGameEngine {
         run.nextCoinX = rider.x + 180;
         run.nextHazardX = rider.x + 650;
         run.nextPowerX = rider.x + 1100;
+        run.snowRate = this.environment.snowIntensity;
         this.populateAhead(run);
       }
     }
@@ -1114,7 +1105,7 @@ export class SnowGameEngine {
     if (angleError > BICYCLE_PHYSICS.landingAngleLimit || Math.abs(rider.angularVelocity) > BICYCLE_PHYSICS.landingSpinLimit) {
       rider.y = groundY;
       run.shake = 12;
-      this.burst(run, rider.x, groundY, 26, '#eaf6f8', 200, -125);
+      this.burst(run, rider.x, groundY, 26, this.environment.burstColors.heavy, 200, -125);
       this.emit({ type: 'crash', kind: 'landing' });
       this.finishRun(run, 'The landing got away from you.');
       return;
@@ -1128,7 +1119,7 @@ export class SnowGameEngine {
     rider.rotation = angle;
     rider.angularVelocity = 0;
     run.shake = Math.max(run.shake, angleError > 0.55 ? 4.2 : 2.4);
-    this.burst(run, rider.x, groundY + 2, angleError > 0.55 ? 16 : 10, '#f4fbfc', 135, -90);
+    this.burst(run, rider.x, groundY + 2, angleError > 0.55 ? 16 : 10, this.environment.burstColors.soft, 135, -90);
 
     if (flips > 0) {
       if (run.elapsed - run.lastTrickAt < 5.5) run.combo += 1;
@@ -1307,7 +1298,8 @@ export class SnowGameEngine {
 
     const speed = clamp((rider.speed - 205) / 270, 0, 1);
     const quality = this.lighterGraphics ? 0.7 : 1;
-    run.wheelSnowCarry += lerp(13, 39, speed) * quality * delta;
+    const spray = this.environment.groundSpray;
+    run.wheelSnowCarry += lerp(13, 39, speed) * quality * spray.rate * delta;
     const bursts = Math.floor(run.wheelSnowCarry);
     run.wheelSnowCarry -= bursts;
     const cos = Math.cos(rider.rotation);
@@ -1328,10 +1320,10 @@ export class SnowGameEngine {
           y: rider.y + localX * sin + localY * cos - 1,
           vx: backward * cos - upward * sin,
           vy: backward * sin + upward * cos,
-          size: 1.1 + Math.random() * (1.1 + speed),
+          size: (1.1 + Math.random() * (1.1 + speed)) * spray.size,
           life,
           maxLife: life,
-          color: '#f4fbff',
+          color: spray.color,
           wheelSnow: true,
         });
       }
@@ -1394,17 +1386,23 @@ export class SnowGameEngine {
     const cameraX = isMenu ? menuX - width * 0.72 : run.cameraX;
     const worldX = isMenu ? menuX : run.rider.x;
     const cycle = (0.62 + (worldX + this.clock * 18) / 25500) % 1;
-    const palette = getPalette(cycle);
-    const winter = isMenu ? 0 : run.winterMix;
-    palette.top = colorMix(palette.top, '#5e8ba5', winter * 0.65);
-    palette.horizon = colorMix(palette.horizon, '#dce5ed', winter * 0.8);
-    palette.snow = colorMix(palette.snow, '#edf6fc', winter * 0.8);
-    palette.snowShade = colorMix(palette.snowShade, '#aec8dc', winter * 0.8);
-    palette.night *= 1 - winter * 0.65;
+    const palette = this.environment.palette(cycle);
     this.lastNight = palette.night;
 
+    // A single reusable view object keeps per-frame allocations out of render.
+    const view = this.environmentView;
+    view.width = width;
+    view.height = height;
+    view.cameraX = cameraX;
+    view.cameraY = isMenu ? 0 : run.cameraY;
+    view.clock = this.clock;
+    view.phase = cycle;
+    view.riderX = worldX;
+    view.isMenu = isMenu;
+    view.lighter = this.lighterGraphics;
+
     context.clearRect(0, 0, width, height);
-    this.drawSky(context, width, height, palette, cycle);
+    this.environment.drawSky(context, view, palette);
 
     const rider = isMenu
       ? { x: menuX, y: this.terrainAt(menuX) - 5, rotation: this.terrainAngle(menuX), grounded: true }
@@ -1412,17 +1410,17 @@ export class SnowGameEngine {
     const shakeX = run && (this.status === 'playing' || this.status === 'gameover' || this.status === 'crashed')
       ? Math.sin(this.clock * 78) * run.shake
       : 0;
-    const cameraY = isMenu ? 0 : run.cameraY;
+    const cameraY = view.cameraY;
 
     context.save();
     context.translate(shakeX, cameraY);
-    this.drawMountains(context, width, height, cameraX, palette);
-    this.drawClouds(context, width, height, cameraX, palette);
+    this.environment.drawBackground(context, view, palette);
     if (!isMenu) {
-      this.drawStartWindmill(context, cameraX, palette, run.elapsed);
-      for (const house of run.houses) this.drawFinishHouse(context, house, cameraX, palette);
+      this.drawStartWindmill(context, cameraX, run.elapsed);
+      for (const house of run.houses) this.drawFinishHouse(context, house, cameraX);
     }
     this.drawTerrain(context, width, height, cameraX, palette, run);
+    this.environment.drawDecorations(context, view, this.decorationReserved);
     if (run && !isMenu) this.drawTrail(context, run, cameraX, palette);
     if (run && !isMenu) this.drawObjects(context, run, cameraX, palette);
     if (run && !isMenu) this.drawParticles(context, run, cameraX);
@@ -1433,8 +1431,10 @@ export class SnowGameEngine {
     context.restore();
     if (run && !isMenu) this.drawPopups(context, run, cameraX);
     if (run && !isMenu && this.obstacleDebug) this.drawObstacleDebug(context, run, cameraX);
-    this.drawSnow(context, width, height, palette);
+    this.environment.drawAmbient(context, view);
     context.restore();
+    // Screen-space weather stays outside the camera shake.
+    this.environment.drawWeather(context, view, palette);
     if (run && !isMenu && this.status === 'playing' && run.levelPhase === 'riding') this.drawObstacleWarning(context, run);
   }
 
@@ -1501,246 +1501,7 @@ export class SnowGameEngine {
     context.restore();
   }
 
-  private shootingStar?: { start: number; x: number; y: number; direction: number };
-  private morningFlock?: { start: number; y: number; count: number; direction: number };
-
-  private drawShootingStar(context: CanvasRenderingContext2D, width: number, height: number, night: number): void {
-    if (night < 0.58) {
-      this.shootingStar = undefined;
-      return;
-    }
-    if (!this.shootingStar || this.clock - this.shootingStar.start > 1.4) {
-      this.shootingStar = {
-        start: this.clock + 2 + Math.random() * 7,
-        x: 0.3 + Math.random() * 0.4,
-        y: 0.04 + Math.random() * 0.12,
-        direction: Math.random() < 0.5 ? -1 : 1,
-      };
-    }
-
-    const star = this.shootingStar;
-    const progress = (this.clock - star.start) / 1.4;
-    if (progress < 0) return;
-
-    const travel = Math.min(width * 0.29, height * 0.55);
-    const x = star.x * width + progress * travel * star.direction;
-    const y = star.y * height + progress * travel * 0.4;
-    const tail = clamp(width * 0.16, 70, 220) * Math.min(progress * 5, 1);
-    const tailX = x - tail * star.direction;
-    const tailY = y - tail * 0.4;
-    const trail = context.createLinearGradient(tailX, tailY, x, y);
-    trail.addColorStop(0, 'rgba(137, 190, 255, 0)');
-    trail.addColorStop(0.65, 'rgba(160, 207, 255, 0.55)');
-    trail.addColorStop(1, '#fff4dc');
-
-    context.save();
-    context.globalAlpha = night * Math.sin(progress * Math.PI);
-    context.shadowColor = '#a5ceff';
-    context.shadowBlur = this.lighterGraphics ? 0 : 12;
-    context.strokeStyle = trail;
-    context.lineWidth = 2;
-    context.beginPath();
-    context.moveTo(tailX, tailY);
-    context.lineTo(x, y);
-    context.stroke();
-    context.fillStyle = '#fff4dc';
-    context.beginPath();
-    context.arc(x, y, 2.2, 0, TAU);
-    context.fill();
-    context.restore();
-  }
-
-  private drawMorningFlock(context: CanvasRenderingContext2D, width: number, height: number, phase: number): void {
-    if (phase < 0.12 || phase > 0.38) {
-      this.morningFlock = undefined;
-      return;
-    }
-    if (!this.morningFlock || this.clock - this.morningFlock.start > 9) {
-      this.morningFlock = {
-        start: this.clock + 1 + Math.random() * 6,
-        y: 0.18 + Math.random() * 0.16,
-        count: 3 + Math.floor(Math.random() * 4),
-        direction: Math.random() < 0.5 ? -1 : 1,
-      };
-    }
-
-    const flock = this.morningFlock;
-    const elapsed = this.clock - flock.start;
-    if (elapsed < 0) return;
-
-    const lead = lerp(-20, width + 110, elapsed / 9);
-    context.save();
-    context.strokeStyle = '#293d51';
-    context.lineWidth = 1.45;
-    context.lineCap = 'round';
-    context.globalAlpha = 0.7 * clamp(Math.min((phase - 0.12) / 0.035, (0.38 - phase) / 0.035), 0, 1);
-    for (let index = 0; index < flock.count; index += 1) {
-      const spacing = lead - index * 17;
-      const x = flock.direction > 0 ? spacing : width - spacing;
-      const y = height * flock.y + (index % 2 ? -1 : 1) * index * 4 + Math.sin(elapsed + index) * 3;
-      const wing = Math.sin(elapsed * 16 + index * 1.7) * 4;
-      context.beginPath();
-      context.moveTo(x - 6, y - wing);
-      context.quadraticCurveTo(x - 3, y - wing - 2, x, y);
-      context.quadraticCurveTo(x + 3, y - wing - 2, x + 6, y - wing);
-      context.stroke();
-    }
-    context.restore();
-  }
-
-  private drawSky(context: CanvasRenderingContext2D, width: number, height: number, palette: Palette, phase: number): void {
-    const sky = context.createLinearGradient(0, 0, 0, height * 0.72);
-    sky.addColorStop(0, palette.top);
-    sky.addColorStop(0.62, colorMix(palette.top, palette.horizon, 0.54));
-    sky.addColorStop(1, palette.horizon);
-    context.fillStyle = sky;
-    context.fillRect(0, 0, width, height);
-
-    const halo = context.createRadialGradient(width * 0.72, height * 0.34, 0, width * 0.72, height * 0.34, height * 0.58);
-    halo.addColorStop(0, alphaColor(palette.glow, 0.2));
-    halo.addColorStop(1, alphaColor(palette.glow, 0));
-    context.fillStyle = halo;
-    context.fillRect(0, 0, width, height * 0.8);
-
-    const sunX = width * (0.68 + Math.sin(phase * TAU) * 0.11);
-    const sunY = height * (0.27 + Math.cos(phase * TAU) * 0.075);
-    const sunOpacity = 1 - palette.night;
-    if (sunOpacity > 0.02) {
-      context.save();
-      context.globalAlpha = sunOpacity;
-      const sunGlow = context.createRadialGradient(sunX, sunY, 4, sunX, sunY, height * 0.18);
-      sunGlow.addColorStop(0, alphaColor(palette.glow, 0.55));
-      sunGlow.addColorStop(1, alphaColor(palette.glow, 0));
-      context.fillStyle = sunGlow;
-      context.beginPath();
-      context.arc(sunX, sunY, height * 0.18, 0, TAU);
-      context.fill();
-      context.fillStyle = '#fff0d3';
-      context.globalAlpha = sunOpacity * 0.9;
-      context.beginPath();
-      context.arc(sunX, sunY, Math.max(14, height * 0.027), 0, TAU);
-      context.fill();
-      context.restore();
-    }
-
-    if (palette.night > 0.12) {
-      context.save();
-      context.globalAlpha = palette.night * 0.86;
-      const moonX = width * (0.77 - Math.sin(phase * TAU) * 0.09);
-      const moonY = height * 0.19;
-      context.shadowColor = palette.moon;
-      context.shadowBlur = this.lighterGraphics ? 0 : 28;
-      context.fillStyle = palette.moon;
-      context.beginPath();
-      context.arc(moonX, moonY, Math.max(10, height * 0.018), 0, TAU);
-      context.fill();
-      context.shadowBlur = 0;
-      context.fillStyle = colorMix(palette.top, palette.horizon, 0.18);
-      context.globalAlpha = palette.night * 0.32;
-      context.beginPath();
-      context.arc(moonX - 5, moonY - 2, Math.max(9, height * 0.017), 0, TAU);
-      context.fill();
-      context.restore();
-    }
-
-    if (palette.night > 0.1) {
-      context.save();
-      for (let index = 0; index < 78; index += 1) {
-        const x = hash(index * 4.3 + 8) * width;
-        const y = hash(index * 7.1 + 22) * height * 0.48;
-        const twinkle = 0.35 + (Math.sin(this.clock * 1.5 + index * 2.3) + 1) * 0.25;
-        context.globalAlpha = palette.night * twinkle;
-        context.fillStyle = index % 7 === 0 ? '#ffe8c8' : '#e4f2f8';
-        context.beginPath();
-        context.arc(x, y, index % 5 === 0 ? 1.35 : 0.8, 0, TAU);
-        context.fill();
-      }
-      context.restore();
-    }
-
-    this.drawShootingStar(context, width, height, palette.night);
-    this.drawMorningFlock(context, width, height, phase);
-  }
-
-  private drawMountains(context: CanvasRenderingContext2D, width: number, height: number, cameraX: number, palette: Palette): void {
-    this.drawMountainLayer(context, width, height, cameraX, 0.1, height * 0.54, height * 0.2, palette.far, 4, palette.night);
-    this.drawMountainLayer(context, width, height, cameraX, 0.19, height * 0.63, height * 0.19, palette.middle, 19, palette.night);
-    this.drawMountainLayer(context, width, height, cameraX, 0.31, height * 0.72, height * 0.14, palette.near, 32, palette.night);
-  }
-
-  private drawMountainLayer(
-    context: CanvasRenderingContext2D,
-    width: number,
-    height: number,
-    cameraX: number,
-    parallax: number,
-    baseY: number,
-    amplitude: number,
-    fill: string,
-    seed: number,
-    night: number,
-  ): void {
-    const step = 150;
-    const offset = cameraX * parallax;
-    const first = Math.floor(offset / step) - 1;
-    const last = Math.ceil((offset + width) / step) + 1;
-    context.beginPath();
-    context.moveTo(first * step - offset, height + 20);
-    for (let index = first; index <= last; index += 1) {
-      const world = index * step;
-      const ridge = 0.2 + (hash(index * 3.71 + seed) * 0.8);
-      const shoulder = 0.25 + hash(index * 8.11 + seed + 7) * 0.5;
-      const centerX = world - offset;
-      const peakY = baseY - amplitude * ridge;
-      context.lineTo(centerX - step * shoulder, baseY - amplitude * ridge * 0.34);
-      context.lineTo(centerX, peakY);
-      context.lineTo(centerX + step * (1 - shoulder), baseY - amplitude * (0.2 + hash(index + seed + 4) * 0.55));
-    }
-    context.lineTo((last + 1) * step - offset, height + 20);
-    context.closePath();
-    context.fillStyle = fill;
-    context.fill();
-
-    context.beginPath();
-    for (let index = first; index <= last; index += 1) {
-      const world = index * step;
-      const ridge = 0.2 + hash(index * 3.71 + seed) * 0.8;
-      const centerX = world - offset;
-      const shoulder = 0.25 + hash(index * 8.11 + seed + 7) * 0.5;
-      if (index === first) context.moveTo(centerX - step * shoulder, baseY - amplitude * ridge * 0.34);
-      context.lineTo(centerX, baseY - amplitude * ridge);
-      context.lineTo(centerX + step * (1 - shoulder), baseY - amplitude * (0.2 + hash(index + seed + 4) * 0.55));
-    }
-    context.strokeStyle = `rgba(255,255,255,${0.12 + night * 0.04})`;
-    context.lineWidth = 1.1;
-    context.stroke();
-  }
-
-  private drawClouds(context: CanvasRenderingContext2D, width: number, height: number, cameraX: number, palette: Palette): void {
-    context.save();
-    context.fillStyle = colorMix('#fffaf4', palette.glow, 0.32);
-    context.globalAlpha = 0.1 + (1 - palette.night) * 0.12;
-    for (let index = 0; index < 7; index += 1) {
-      const span = width + 280;
-      const drift = this.clock * (7 + (index % 3) * 3) + cameraX * 0.035;
-      const x = ((index * 247 + 30 - drift) % span + span) % span - 120;
-      const y = height * (0.14 + hash(index * 13) * 0.22);
-      const scale = 0.55 + hash(index * 17 + 2) * 0.85;
-      context.save();
-      context.translate(x, y);
-      context.scale(scale, scale * 0.54);
-      context.beginPath();
-      context.ellipse(0, 0, 48, 12, 0, 0, TAU);
-      context.ellipse(-24, -6, 20, 12, 0, 0, TAU);
-      context.ellipse(0, -11, 24, 17, 0, 0, TAU);
-      context.ellipse(26, -4, 20, 12, 0, 0, TAU);
-      context.fill();
-      context.restore();
-    }
-    context.restore();
-  }
-
-  private drawStartWindmill(context: CanvasRenderingContext2D, cameraX: number, palette: Palette, elapsed: number): void {
+  private drawStartWindmill(context: CanvasRenderingContext2D, cameraX: number, elapsed: number): void {
     const millX = -78;
     const x = millX - cameraX;
     if (x < -160 || x > this.width + 160) return;
@@ -1781,7 +1542,7 @@ export class SnowGameEngine {
     context.lineTo(34, -99);
     context.closePath();
     context.fill();
-    context.strokeStyle = palette.snow;
+    context.strokeStyle = '#edf3ef';
     context.lineWidth = 4;
     context.beginPath();
     context.moveTo(-30, -102);
@@ -1853,7 +1614,7 @@ export class SnowGameEngine {
     context.restore();
   }
 
-  private drawFinishHouse(context: CanvasRenderingContext2D, house: FinishHouse, cameraX: number, palette: Palette): void {
+  private drawFinishHouse(context: CanvasRenderingContext2D, house: FinishHouse, cameraX: number): void {
     const x = house.x - cameraX;
     if (x < -120 || x > this.width + 120) return;
     context.save();
@@ -1882,7 +1643,7 @@ export class SnowGameEngine {
     context.lineTo(72, -80);
     context.closePath();
     context.fill();
-    context.strokeStyle = palette.snow;
+    context.strokeStyle = '#edf3ef';
     context.lineWidth = 6;
     context.lineCap = 'round';
     context.lineJoin = 'round';
@@ -1904,7 +1665,7 @@ export class SnowGameEngine {
     context.moveTo(-40, -47);
     context.lineTo(-14, -47);
     context.stroke();
-    context.fillStyle = palette.snow;
+    context.fillStyle = '#e8edf0';
     context.fillRect(-45, -32, 36, 4);
 
     // The open doorway is large enough for the rider and bicycle to enter.
@@ -1951,7 +1712,7 @@ export class SnowGameEngine {
       context.beginPath();
       context.moveTo(segment[0].x, segment[0].y);
       for (const point of segment) context.lineTo(point.x, point.y);
-      context.strokeStyle = 'rgba(255,255,255,0.92)';
+      context.strokeStyle = alphaColor(colorMix(palette.snow, '#ffffff', 0.5), 0.9);
       context.lineWidth = 2.4;
       context.lineJoin = 'round';
       context.stroke();
@@ -2607,23 +2368,4 @@ export class SnowGameEngine {
     context.stroke();
   }
 
-  private drawSnow(context: CanvasRenderingContext2D, width: number, height: number, palette: Palette): void {
-    context.save();
-    const winter = this.status === 'menu' ? 0 : this.run?.winterMix ?? 0;
-    const storm = this.stormLevel() * (1 - winter * 0.8);
-    const flakeCount = Math.floor((54 + storm * 58) * (this.lighterGraphics ? 0.55 : 1));
-    for (let index = 0; index < flakeCount; index += 1) {
-      const fallSpeed = 14 + hash(index * 4.7 + 4) * 27 + storm * 28;
-      const drift = Math.sin(this.clock * 0.46 + index * 1.8) * 15 + Math.sin(this.clock * 0.18) * storm * 48;
-      const x = (hash(index * 9.3 + 1) * width + drift + width + 30) % width;
-      const y = (hash(index * 5.1 + 3) * height + this.snowClock * fallSpeed) % height;
-      const size = 0.45 + hash(index * 2.9 + 17) * 1.2;
-      context.globalAlpha = (0.13 + palette.night * 0.11 + storm * 0.11) * (0.45 + size * 0.35);
-      context.fillStyle = '#ffffff';
-      context.beginPath();
-      context.arc(x, y, size, 0, TAU);
-      context.fill();
-    }
-    context.restore();
-  }
 }
