@@ -1,9 +1,10 @@
-import { ObstaclePlanner, validPlacementMetadata, type PlacementMetadata, type PlacementRejection } from './obstaclePlanner';
+import { ObstaclePlanner, OBSTACLE_PATTERNS, patternRating, validPlacementMetadata, type PlacementMetadata, type PlacementRejection } from './obstaclePlanner';
 import { OBSTACLE_REGISTRY, swingingLogPose } from './obstacleRegistry';
 import { flipProgress } from './riderPhysics';
 import { BICYCLE_PHYSICS, TerrainWorld, type TerrainOrigin } from './terrain';
 import { EnvironmentManager, decorationOverlapsGameplay, type EnvironmentView, type Palette } from './environment';
 import { createLevelRandom, LevelManager } from './levelManager';
+import { DifficultyManager, type DifficultyDirective } from './difficulty';
 
 import { BIKES, RIDERS, MISSIONS, MISSION_BONUS } from './progression';
 
@@ -143,6 +144,8 @@ interface RunState {
   nextBridgeX: number;
   nextPowerX: number;
   powerIndex: number;
+  /** Phase 5 pacing memory: recently scheduled pattern ids (oldest first). */
+  recentPatterns?: string[];
   magnetUntil: number;
   doubleUntil: number;
   shield: boolean;
@@ -203,6 +206,9 @@ function isRunCheckpoint(value: unknown): value is RunState {
     && (object.pulled === undefined || (finite(object.pulled.x) && finite(object.pulled.y)))
     && (object.plan === undefined || validPlacementMetadata(object.plan)))) return false;
   if (run.hazardClearUntil !== undefined && !nonnegative(run.hazardClearUntil)) return false;
+  if (run.recentPatterns !== undefined && (!Array.isArray(run.recentPatterns) || run.recentPatterns.length > 16
+    || !run.recentPatterns.every((id) => typeof id === 'string'
+      && (id === 'recovery' || OBSTACLE_PATTERNS.some((pattern) => pattern.id === id))))) return false;
   if (run.terrainOrigins !== undefined && (!Array.isArray(run.terrainOrigins) || run.terrainOrigins.length === 0
     || !run.terrainOrigins.every((origin, index) => origin && Number.isSafeInteger(origin.level)
       && origin.level >= 1 && nonnegative(origin.x) && finite(origin.offset)
@@ -234,6 +240,12 @@ const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 function hash(value: number): number {
   const n = Math.sin(value * 127.1 + 311.7) * 43758.5453123;
   return n - Math.floor(n);
+}
+
+/** Hazards that demand a committed jump or sweep through the riding line;
+ *  these are retired ahead of the rider during the safe final approach. */
+function isDangerousObstacle(object: Obstacle): boolean {
+  return (object.kind === 'gap' && !object.bridged) || object.kind === 'ramp' || object.kind === 'swinging-log';
 }
 
 function colorMix(a: string, b: string, amount: number): string {
@@ -289,6 +301,17 @@ export class SnowGameEngine {
   private readonly obstaclePlanner = new ObstaclePlanner();
   private obstacleDebug = false;
   private obstacleRejections: PlacementRejection[] = [];
+
+  // Phase 5 — intelligent difficulty & obstacle pacing. The manager emits a
+  // pure, viewport-independent directive each planning pass; the planner (not
+  // the engine) turns it into pattern choices. Rider speed limits, physics,
+  // terrain shape and collisions are untouched by it.
+  private readonly difficulty = new DifficultyManager();
+  private lastDirective?: DifficultyDirective;
+  private lastPlanInfo: { patternId: string; rating: number; spacing: number } | null = null;
+  /** Fixed terrain-complexity sampling window: generation must not depend on
+   *  the viewport, or wide and narrow screens would diverge (see tests). */
+  private static readonly COMPLEXITY_WINDOW = 2000;
 
   // Phase 4 — dynamic environment & weather. Rendering of skies, parallax,
   // clouds, fog, weather and decorations is delegated to this manager; the
@@ -432,6 +455,7 @@ export class SnowGameEngine {
       nextBridgeX: 760,
       nextPowerX: 760,
       powerIndex: 0,
+      recentPatterns: [],
       magnetUntil: 0,
       doubleUntil: 0,
       shield: false,
@@ -724,6 +748,24 @@ export class SnowGameEngine {
     if (run.levelPhase !== 'riding') return;
     const ahead = run.rider.x + this.width * 1.7 + 520;
 
+    // Phase 5 pacing directive: depends only on the level, scored progress and
+    // the terrain in a fixed window ahead — never on the viewport — so obstacle
+    // generation stays identical across screen sizes.
+    const level = this.levels.current;
+    const progress = clamp((this.runScore(run) - run.levelStartScore) / level.targetScore, 0, 1);
+    const terrainComplexity = this.terrain
+      ? this.terrain.complexity(run.rider.x, run.rider.x + SnowGameEngine.COMPLEXITY_WINDOW)
+      : 0;
+    const directive = this.difficulty.directive({ level, progress, terrainComplexity });
+    this.lastDirective = directive;
+    if (directive.safeApproach) {
+      // Final approach (45 k → house): retire dangerous hazards the rider has
+      // not yet seen (beyond the right screen edge) and let the planner below
+      // schedule only mild ones. Visible obstacles are never yanked away.
+      run.objects = run.objects.filter((object) =>
+        !isDangerousObstacle(object) || object.x <= run.rider.x + this.width);
+    }
+
     while (run.nextCoinX < ahead) {
       const start = run.nextCoinX;
       const random = createLevelRandom(this.levels.current.seed ^ Math.floor(start) ^ 0x51c01);
@@ -766,11 +808,22 @@ export class SnowGameEngine {
           ...run.houses.map(house => ({ start: house.x - 300, end: house.x + 300 })),
         ],
         nearby: run.objects.filter(object => ['rock', 'log', 'tree', 'gap', 'ramp', 'swinging-log'].includes(object.kind)),
+        directive,
+        recentPatterns: run.recentPatterns,
       });
       run.objects.push(...plan.obstacles);
       run.hazardClearUntil = Math.max(run.hazardClearUntil ?? 0, plan.clearUntil);
       for (const obstacle of plan.obstacles) {
         if (obstacle.bridged) run.nextBridgeX = obstacle.x + (obstacle.width ?? 0) + 4500;
+      }
+      if (plan.obstacles.length) {
+        run.recentPatterns = [...(run.recentPatterns ?? []), plan.patternId]
+          .slice(-directive.recentPatternMemory);
+        this.lastPlanInfo = {
+          patternId: plan.patternId,
+          rating: patternRating(plan.patternId) ?? 0,
+          spacing: plan.obstacles[0].plan.spacing,
+        };
       }
       if (this.obstacleDebug) this.obstacleRejections = [...this.obstacleRejections, ...plan.rejected].slice(-24);
       run.nextHazardX = plan.nextX;
@@ -1055,6 +1108,9 @@ export class SnowGameEngine {
         run.snowRate = this.environment.snowIntensity;
         run.seed = nextLevel.seed;
         run.nextStatAt = run.elapsed + 9;
+        // Fresh pacing memory for the new level's obstacle variety.
+        run.recentPatterns = [];
+        this.lastPlanInfo = null;
         this.callbacks.onHud(this.makeHud(run));
       }
     } else if (run.levelPhase === 'exiting') {
@@ -1462,6 +1518,7 @@ export class SnowGameEngine {
     context.lineWidth = 1;
     context.font = '10px monospace';
     context.textAlign = 'left';
+    this.drawDifficultyDebug(context, run);
     for (const object of run.objects) {
       if (!['rock', 'tree', 'log', 'gap', 'ramp', 'swinging-log'].includes(object.kind)) continue;
       const x = object.x - cameraX;
@@ -1499,6 +1556,33 @@ export class SnowGameEngine {
       context.fillText(`REJECT ${rejected.patternId} @${Math.round(rejected.x)}: ${rejected.reason}`, 12, 90 + row++ * 14);
     }
     context.restore();
+  }
+
+  /** Phase 5 debug panel: level, difficulty, pacing zone, wave, pattern,
+   *  terrain complexity, spacing and the upcoming recovery zone. */
+  private drawDifficultyDebug(context: CanvasRenderingContext2D, run: RunState): void {
+    const directive = this.lastDirective;
+    const rows: string[] = [
+      `LVL ${run.levelIndex + 1} · ${directive ? directive.environment.toUpperCase() : this.levels.current.environment.toUpperCase()}`,
+    ];
+    if (directive) {
+      const wave = directive.wave;
+      const recovery = directive.nextRecoveryPoints === null
+        ? 'SAFE APPROACH'
+        : directive.nextRecoveryPoints === 0 ? 'RECOVERY ACTIVE'
+        : `recovery in ~${(directive.nextRecoveryPoints / 1000).toFixed(1)}k pts`;
+      rows.push(
+        `DIFF ${directive.intensity.toFixed(2)} (lvl ${directive.levelIntensity.toFixed(2)} · zone ${directive.zone.multiplier.toFixed(2)} · wave ${wave.tension.toFixed(2)} · terr ${(1 - 0.3 * directive.terrainComplexity).toFixed(2)})`,
+        `ZONE ${directive.zone.label} (${(directive.zone.fromPoints / 1000).toFixed(0)}k–${(directive.zone.toPoints / 1000).toFixed(0)}k pts)`,
+        `WAVE ${wave.index + 1}/${wave.count} · ${recovery}`,
+        `PATTERN ${this.lastPlanInfo ? `${this.lastPlanInfo.patternId} · rating ${this.lastPlanInfo.rating.toFixed(2)} · spacing ${Math.round(this.lastPlanInfo.spacing)}px` : '—'}`,
+        `TERRAIN complexity ${directive.terrainComplexity.toFixed(2)} · spacing min ${Math.round(directive.minSpacing)}px · jump reach ${directive.riderEnvelope.minJumpDistance}–${directive.riderEnvelope.maxJumpDistance}px`,
+      );
+    } else {
+      rows.push('DIFF — (no planning pass yet)');
+    }
+    context.fillStyle = '#b8e6ff';
+    rows.forEach((text, index) => context.fillText(text, 12, 16 + index * 13));
   }
 
   private drawStartWindmill(context: CanvasRenderingContext2D, cameraX: number, elapsed: number): void {

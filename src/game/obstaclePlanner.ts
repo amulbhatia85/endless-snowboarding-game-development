@@ -1,6 +1,7 @@
 import { createLevelRandom, type LevelConfiguration } from './levelManager';
 import { OBSTACLE_REGISTRY, obstacleReady, type ActiveObstacleId, type ObstacleId, type ObstacleGroup } from './obstacleRegistry';
 import { BICYCLE_PHYSICS } from './riderPhysics';
+import type { DifficultyDirective } from './difficulty';
 import {
   validateGap, validateRamp, validateBridge, validateObstacle, validateRampGap, validateSwingingLog,
   type LandingValidation, type TraversalOptions,
@@ -38,24 +39,44 @@ interface Pattern {
   weight: number;
   requires: readonly ObstacleId[];
   sequence: readonly ActiveObstacleId[];
+  /** Phase 5 challenge rating, 0 (trivial) .. 1 (demanding): the pacing engine
+   *  selects patterns whose rating matches the current difficulty target. */
+  rating: number;
   downhill?: boolean;
   coupled?: boolean;
 }
 export const OBSTACLE_PATTERNS: readonly Pattern[] = [
-  { id: 'single-rock', minLevel: 1, weight: 24, requires: ['rock'], sequence: ['rock'] },
-  { id: 'single-log', minLevel: 1, weight: 19, requires: ['log'], sequence: ['log'] },
-  { id: 'single-tree', minLevel: 1, weight: 10, requires: ['tree'], sequence: ['tree'] },
-  { id: 'log-recovery', minLevel: 1, weight: 10, requires: ['log'], sequence: ['log'] },
-  { id: 'small-gap', minLevel: 1, weight: 9, requires: ['gap'], sequence: ['gap'] },
-  { id: 'rope-bridge', minLevel: 1, weight: 3, requires: ['bridge'], sequence: ['bridge'] },
-  { id: 'controlled-ramp', minLevel: 1, weight: 3, requires: ['ramp'], sequence: ['ramp'] },
-  { id: 'downhill-rock', minLevel: 2, weight: 7, requires: ['rock'], sequence: ['rock'], downhill: true },
-  { id: 'double-logs', minLevel: 3, weight: 16, requires: ['log'], sequence: ['log', 'log'] },
-  { id: 'ramp-gap', minLevel: 4, weight: 9, requires: ['ramp', 'gap'], sequence: ['ramp', 'gap'], coupled: true },
-  { id: 'advanced-static-sequence', minLevel: 6, weight: 13, requires: ['rock', 'log'], sequence: ['rock', 'log', 'rock'] },
+  { id: 'single-rock', minLevel: 1, weight: 24, requires: ['rock'], sequence: ['rock'], rating: 0.08 },
+  { id: 'single-log', minLevel: 1, weight: 19, requires: ['log'], sequence: ['log'], rating: 0.12 },
+  { id: 'single-tree', minLevel: 1, weight: 10, requires: ['tree'], sequence: ['tree'], rating: 0.18 },
+  { id: 'log-recovery', minLevel: 1, weight: 10, requires: ['log'], sequence: ['log'], rating: 0.05 },
+  { id: 'small-gap', minLevel: 1, weight: 9, requires: ['gap'], sequence: ['gap'], rating: 0.42 },
+  { id: 'rope-bridge', minLevel: 1, weight: 3, requires: ['bridge'], sequence: ['bridge'], rating: 0.25 },
+  { id: 'controlled-ramp', minLevel: 1, weight: 3, requires: ['ramp'], sequence: ['ramp'], rating: 0.5 },
+  { id: 'downhill-rock', minLevel: 2, weight: 7, requires: ['rock'], sequence: ['rock'], rating: 0.3, downhill: true },
+  { id: 'double-logs', minLevel: 3, weight: 16, requires: ['log'], sequence: ['log', 'log'], rating: 0.55 },
+  { id: 'ramp-gap', minLevel: 4, weight: 9, requires: ['ramp', 'gap'], sequence: ['ramp', 'gap'], rating: 0.78, coupled: true },
+  { id: 'advanced-static-sequence', minLevel: 6, weight: 13, requires: ['rock', 'log'], sequence: ['rock', 'log', 'rock'], rating: 0.7 },
   // Moving hazards require a complete renderer, collider, warning and validated envelope.
-  { id: 'warned-swinging-log', minLevel: 8, weight: 10, requires: ['swinging-log'], sequence: ['swinging-log'] },
+  { id: 'warned-swinging-log', minLevel: 8, weight: 10, requires: ['swinging-log'], sequence: ['swinging-log'], rating: 0.85 },
 ];
+
+/** Challenge rating of a pattern id (undefined for 'recovery'/unknown). */
+export function patternRating(id: string): number | undefined {
+  return OBSTACLE_PATTERNS.find(pattern => pattern.id === id)?.rating;
+}
+
+/**
+ * Dangerous patterns demand a clean takeoff corridor or sweep a moving hazard:
+ * gaps, ramps, swinging logs and multi-obstacle combinations. The safe final
+ * approach (45 k → house) refuses to schedule any of them.
+ */
+export function patternIsDangerous(id: string): boolean {
+  const pattern = OBSTACLE_PATTERNS.find(item => item.id === id);
+  if (!pattern) return false;
+  return pattern.coupled === true || pattern.sequence.length > 1
+    || pattern.requires.some(id => id === 'gap' || id === 'ramp' || id === 'swinging-log');
+}
 
 export interface PlanningContext {
   level: LevelConfiguration;
@@ -69,6 +90,11 @@ export interface PlanningContext {
   rampAllowedAfter: number;
   reserved: readonly Region[];
   nearby: readonly { kind: string; x: number; width?: number; plan?: PlacementMetadata }[];
+  /** Phase 5 pacing directive. Absent → legacy behaviour (fixed reaction
+   *  budget, flat weights, 17 % recovery) so existing callers are unchanged. */
+  directive?: DifficultyDirective;
+  /** Recently scheduled pattern ids, oldest first — drives repetition control. */
+  recentPatterns?: readonly string[];
 }
 
 export function patternAvailability(level: LevelConfiguration): { id: string; category: ObstacleGroup; available: boolean; reason?: string }[] {
@@ -102,7 +128,12 @@ export class ObstaclePlanner {
     if (![context.candidateX, context.riderX, context.riderSpeed, context.riderAcceleration, context.clearUntil]
       .every(Number.isFinite)) throw new RangeError('Planning positions and rider motion must be finite.');
     const random = createLevelRandom(context.level.seed ^ Math.floor(context.candidateX) ^ 0x7a2a4d);
-    const reactionSeconds = Math.max(0.95, 1.25 - context.level.difficulty.progression * 0.3);
+    const directive = context.directive;
+    // Reaction budget: pacing-driven when a directive is supplied, otherwise
+    // the legacy progression-based bound (identical to pre-Phase-5 behaviour).
+    const reactionSeconds = directive
+      ? directive.reactionSeconds
+      : Math.max(0.95, 1.25 - context.level.difficulty.progression * 0.3);
     const approachTime = Math.max(0, context.candidateX - context.riderX) / Math.max(205, context.riderSpeed);
     const projectedSpeed = clamp(context.riderSpeed + context.riderAcceleration * approachTime,
       BICYCLE_PHYSICS.minSpeed, BICYCLE_PHYSICS.maxSpeed);
@@ -118,12 +149,28 @@ export class ObstaclePlanner {
       rejected: reason ? [...rejected, { x: context.candidateX, patternId: 'recovery', reason }] : rejected,
     });
 
-    if (random() < 0.17) return recover();
+    // Wave valleys and low-intensity zones schedule deliberate recovery
+    // sections; the legacy flat chance keeps directive-less callers unchanged.
+    if (random() < (directive?.recoveryChance ?? 0.17)) return recover();
     const availability = patternAvailability(context.level);
     const candidates = OBSTACLE_PATTERNS.filter(pattern => availability.find(item => item.id === pattern.id)?.available)
       .filter(pattern => !pattern.requires.includes('bridge') || context.candidateX >= context.bridgeAllowedAfter)
-      .filter(pattern => !pattern.requires.includes('ramp') || context.candidateX >= context.rampAllowedAfter);
-    const weights = candidates.map(pattern => pattern.weight);
+      .filter(pattern => !pattern.requires.includes('ramp') || context.candidateX >= context.rampAllowedAfter)
+      .filter(pattern => !directive?.safeApproach || !patternIsDangerous(pattern.id));
+    // Weighted selection tuned to the pacing target: patterns whose challenge
+    // rating matches the directive's intensity dominate, recent patterns are
+    // exponentially discounted, and everything stays seeded and deterministic.
+    const recent = directive ? (context.recentPatterns ?? []) : [];
+    const weights = candidates.map(pattern => {
+      let weight = pattern.weight;
+      if (directive) {
+        const delta = pattern.rating - directive.patternIntensity;
+        weight *= Math.max(0.12, Math.exp(-(delta * delta) / (2 * 0.22 * 0.22)));
+        const repeats = recent.reduce((count, id) => count + (id === pattern.id ? 1 : 0), 0);
+        weight *= 0.5 ** repeats;
+      }
+      return weight;
+    });
     for (let attempt = 0; attempt < 3 && candidates.length; attempt++) {
       const total = weights.reduce((sum, weight) => sum + weight, 0);
       let pick = random() * total;
@@ -137,9 +184,21 @@ export class ObstaclePlanner {
         continue;
       }
       const extraRecovery = pattern.id === 'log-recovery' ? 600 : 0;
+      // Inter-group spacing: pacing-driven base plus conservative corridors —
+      // dangerous patterns earn extra recovery room, and a dangerous pattern
+      // directly after another dangerous landing is spaced further still.
+      const spacingBase = directive ? directive.minSpacing : 110;
+      const dangerPad = directive
+        ? directive.dangerRecovery * (patternIsDangerous(pattern.id) ? 1 : 0.3)
+        : 0;
+      const previous = recent.length ? recent[recent.length - 1] : undefined;
+      const stackingPad = directive && previous !== undefined
+        && patternIsDangerous(previous) && patternIsDangerous(pattern.id)
+        ? directive.dangerRecovery * 0.6
+        : 0;
       return {
         patternId: pattern.id, obstacles: plan.obstacles, clearUntil: plan.clearUntil,
-        nextX: plan.clearUntil + reactionDistance + 110 + extraRecovery + random() * 180,
+        nextX: plan.clearUntil + reactionDistance + spacingBase + extraRecovery + dangerPad + stackingPad + random() * 180,
         rejected,
       };
     }

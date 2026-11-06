@@ -79,6 +79,31 @@ export class TerrainGenerator {
     return chunk.startHeight + (chunk.endHeight - chunk.startHeight) * smooth(t) + chunk.bump * bump;
   }
 
+  /**
+   * Phase 5 difficulty input: 0..1 roughness of the terrain across a window.
+   * Recovery chunks are near zero; working chunks blend slope and bump
+   * amplitude against the environment's profile bounds. Deterministic and
+   * viewport-independent (the caller picks a fixed window).
+   */
+  complexity(fromX: number, toX: number): number {
+    const first = Math.max(0, Math.floor(fromX / TERRAIN_CHUNK_WIDTH));
+    const last = Math.max(first, Math.ceil(toX / TERRAIN_CHUNK_WIDTH) - 1);
+    const profile = PROFILES[this.configuration.environment];
+    let total = 0;
+    let count = 0;
+    for (let index = first; index <= last; index += 1) {
+      const chunk = this.chunk(index);
+      if (chunk.pattern === 'recovery') total += 0.05;
+      else {
+        const slope = Math.min(1, Math.abs(chunk.endHeight - chunk.startHeight) / Math.max(1, profile.range));
+        const roughness = Math.min(1, Math.abs(chunk.bump) / Math.max(1, profile.bump));
+        total += 0.3 + 0.35 * slope + 0.35 * roughness;
+      }
+      count += 1;
+    }
+    return count ? total / count : 0;
+  }
+
   maintain(left: number, right: number): void {
     const first = Math.max(0, Math.floor(left / TERRAIN_CHUNK_WIDTH) - 1);
     const last = Math.max(first, Math.ceil(right / TERRAIN_CHUNK_WIDTH) + 1);
@@ -109,6 +134,15 @@ export class TerrainWorld {
       if (x >= this.origins[index].x) { origin = this.origins[index]; break; }
     }
     return origin.offset + this.generator(origin).heightAt(x - origin.x);
+  }
+
+  /** Terrain complexity across a window, delegated to the owning generator. */
+  complexity(fromX: number, toX: number): number {
+    let origin = this.origins[0];
+    for (let index = this.origins.length - 1; index >= 0; index -= 1) {
+      if (fromX >= this.origins[index].x) { origin = this.origins[index]; break; }
+    }
+    return this.generator(origin).complexity(fromX - origin.x, toX - origin.x);
   }
 
   maintain(cameraX: number, width: number): void {
