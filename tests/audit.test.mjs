@@ -78,7 +78,7 @@ const channelDistance = (a, b) => {
   return Math.max(...first.map((value, index) => Math.abs(value - second[index])));
 };
 
-const HAZARD_KINDS = ['rock', 'log', 'tree', 'gap', 'ramp', 'swinging-log'];
+const HAZARD_KINDS = ['rock', 'log', 'tree', 'gap', 'ramp', 'swinging-log', 'root', 'fence', 'ice', 'icicle', 'snowball', 'branch'];
 const POWER_KINDS = ['magnet', 'shield', 'double'];
 
 /** Drives populateAhead across the level journey and collects everything

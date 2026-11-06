@@ -301,12 +301,72 @@ export function validateBridge(heightAt: (x: number) => number, x: number, width
 }
 
 export function validateObstacle(
-  heightAt: (x: number) => number, x: number, kind: 'rock' | 'tree' | 'log', options?: TraversalOptions,
+  heightAt: (x: number) => number, x: number, kind: 'rock' | 'tree' | 'log' | 'root' | 'fence', options?: TraversalOptions,
 ): LandingValidation {
   const { radius, height } = OBSTACLE_REGISTRY[kind].collision!;
-  const takeoff = x - (kind === 'tree' ? 100 : 65);
+  const takeoff = x - (kind === 'tree' ? 100 : kind === 'fence' ? 85 : kind === 'root' ? 58 : 65);
   return validateLanding(heightAt, takeoff, heightAt(takeoff) - 5, x + radius,
     { x, radius, height }, options);
+}
+
+/**
+ * Ground-level environmental patches (ice): the rider crosses on the ground, so
+ * no jump is simulated. The patch demands gentle, step-free terrain so the
+ * reduced-traction physics stays controllable at every point of the crossing.
+ */
+export function validateIcePatch(
+  heightAt: (x: number) => number, x: number, width: number,
+): LandingValidation {
+  if (!Number.isFinite(width) || width < 90 || width > 280) {
+    return { safe: false, clearUntil: x, reason: 'Ice patch width outside validated limits' };
+  }
+  for (let sample = x; sample <= x + width; sample += 35) {
+    const slope = Math.abs((heightAt(Math.min(sample + 35, x + width)) - heightAt(sample)) / 35);
+    if (slope > 0.16) return { safe: false, clearUntil: x, reason: 'Ice patch terrain too steep for reduced traction' };
+  }
+  if (Math.abs(heightAt(x + width) - heightAt(x)) / width > 0.1) {
+    return { safe: false, clearUntil: x, reason: 'Ice patch drifts across elevation bands' };
+  }
+  return {
+    safe: true,
+    clearUntil: x + width + 100,
+    takeoff: { start: x - 30, end: x },
+    landing: { start: x + width, end: x + width + 70 },
+  };
+}
+
+/**
+ * Overhead falling hazards (icicles, branches): the rider passes underneath on
+ * the ground. Validation only demands a readable, rideable corridor through the
+ * fall zone — no forced jumps, no steep steps while the player watches the cycle.
+ */
+export function validateFallingHazard(
+  heightAt: (x: number) => number, x: number,
+): LandingValidation {
+  for (let sample = x - 90; sample <= x + 90; sample += 30) {
+    const slope = Math.abs((heightAt(sample + 30) - heightAt(sample)) / 30);
+    if (slope > 0.2) return { safe: false, clearUntil: x, reason: 'Falling-hazard corridor too steep to read' };
+  }
+  return {
+    safe: true,
+    clearUntil: x + 90,
+    takeoff: { start: x - 60, end: x - 20 },
+    landing: { start: x + 30, end: x + 80 },
+  };
+}
+
+/**
+ * Rolling ground hazards (snowballs): like the swinging log, the validation
+ * covers the full patrol corridor — one jump clears the ball wherever it is.
+ */
+export function validateSnowball(
+  heightAt: (x: number) => number, x: number, options?: TraversalOptions,
+): LandingValidation {
+  // Patrol amplitude 48 + downhill bias 16 + ball radius 17 = 81px corridor —
+  // the same proven profile as the swinging log, clearable in one jump at
+  // minimum speed wherever the patrol has carried the ball.
+  return validateLanding(heightAt, x - 160, heightAt(x - 160) - 5, x + 81,
+    { x, radius: 81, height: 30 }, options);
 }
 
 export function validateRampGap(

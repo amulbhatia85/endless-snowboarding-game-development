@@ -6,7 +6,7 @@ import { moduleUrl } from './loadTypeScript.mjs';
 const { generateLevel } = await import(moduleUrl('src/game/levelManager.ts'));
 const { OBSTACLE_REGISTRY, obstacleReady, swingingLogPose } = await import(moduleUrl('src/game/obstacleRegistry.ts'));
 const { ObstaclePlanner, patternAvailability, validPlacementMetadata } = await import(moduleUrl('src/game/obstaclePlanner.ts'));
-const { TerrainGenerator, validateRampGap, validateGap, validateRamp, validateObstacle, validateSwingingLog } = await import(moduleUrl('src/game/terrain.ts'));
+const { TerrainGenerator, validateRampGap, validateGap, validateRamp, validateObstacle, validateSwingingLog, validateIcePatch, validateSnowball, validateFallingHazard } = await import(moduleUrl('src/game/terrain.ts'));
 const { SnowGameEngine } = await import(moduleUrl('src/game/engine.ts'));
 
 function context(level = 1, seed = 42, surface = () => 360) {
@@ -41,10 +41,11 @@ function plans(level, count = 55, seed = 42, surface = () => 360) {
 }
 
 test('Registry activates only complete implementations and filters unavailable theme assets', () => {
-  for (const id of ['root', 'fence', 'cliff', 'broken-bridge', 'ice', 'icicle', 'snowball', 'moving-platform', 'branch']) {
-    assert.equal(obstacleReady(id), false);
+  // Phase 9A: the full expanded library is implemented and active.
+  for (const id of ['rock', 'log', 'tree', 'root', 'fence', 'cliff', 'broken-bridge', 'ice', 'icicle', 'snowball', 'swinging-log', 'moving-platform', 'branch']) {
+    assert.equal(obstacleReady(id), true);
   }
-  assert.equal(obstacleReady('swinging-log'), true);
+  assert.equal(obstacleReady('root'), true);
   assert.ok(!patternAvailability(generateLevel(1, 42)).find(pattern => pattern.id === 'double-logs').available);
   for (const level of [1, 2, 3, 4, 8, 30]) {
     const allowed = generateLevel(level, 42).allowedObstacles;
@@ -120,6 +121,9 @@ test('Generated sequences retain feasible tap and held-flip traversal across the
         const validation = obstacle.kind === 'gap' ? validateGap(surface, obstacle.x, obstacle.width, options)
           : obstacle.kind === 'ramp' ? validateRamp(surface, obstacle.x, options)
           : obstacle.kind === 'swinging-log' ? validateSwingingLog(surface, obstacle.x, options)
+          : obstacle.kind === 'ice' ? validateIcePatch(surface, obstacle.x, obstacle.width)
+          : obstacle.kind === 'snowball' ? validateSnowball(surface, obstacle.x, options)
+          : (obstacle.kind === 'icicle' || obstacle.kind === 'branch') ? validateFallingHazard(surface, obstacle.x)
           : validateObstacle(surface, obstacle.x, obstacle.kind, options);
         assert.equal(validation.safe, true, plan.patternId);
         validated++;

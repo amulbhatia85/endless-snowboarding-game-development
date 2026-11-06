@@ -12,7 +12,7 @@ const {
 } = await import(moduleUrl('src/game/progression.ts'));
 
 const WALLET_KEY = 'afterglow-wallet-v1';
-const HAZARD_KINDS = ['rock', 'tree', 'log', 'swinging-log'];
+const HAZARD_KINDS = ['rock', 'tree', 'log', 'swinging-log', 'root', 'fence', 'snowball', 'icicle', 'branch'];
 
 function storage(values = new Map()) {
   return { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => { values.set(key, value); }, values };

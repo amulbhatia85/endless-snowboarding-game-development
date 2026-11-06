@@ -1,9 +1,9 @@
 import { ObstaclePlanner, OBSTACLE_PATTERNS, patternAvailability, patternRating, validPlacementMetadata, type PlacementMetadata, type PlacementRejection } from './obstaclePlanner';
-import { OBSTACLE_REGISTRY, obstacleReady, swingingLogPose } from './obstacleRegistry';
+import { OBSTACLE_REGISTRY, obstacleReady, swingingLogPose, iciclePose, branchPose, snowballPose, platformBob, type ObstacleId } from './obstacleRegistry';
 import { flipProgress } from './riderPhysics';
 import { BICYCLE_PHYSICS, TerrainWorld, type TerrainOrigin } from './terrain';
 import { EnvironmentManager, decorationOverlapsGameplay, type EnvironmentView, type Palette } from './environment';
-import { createLevelRandom, LevelManager } from './levelManager';
+import { createLevelRandom, LevelManager, previewLevelForObstacle } from './levelManager';
 import { DifficultyManager, type DifficultyDirective } from './difficulty';
 
 import { BIKES, RIDERS, TRAILS, MISSIONS, MISSION_BONUS, isUnlocked, requirementsMet, findCosmetic, type BikeEntry, type RiderEntry, type TrailEntry, type UnlockContext } from './progression';
@@ -81,7 +81,8 @@ export const POWERS = {
 type PowerKind = keyof typeof POWERS;
 const POWER_ORDER: PowerKind[] = ['magnet', 'shield', 'double'];
 
-type ObstacleKind = 'coin' | 'rock' | 'tree' | 'gap' | 'ramp' | 'log' | 'swinging-log' | PowerKind;
+type ObstacleKind = 'coin' | 'rock' | 'tree' | 'gap' | 'ramp' | 'log' | 'swinging-log'
+  | 'root' | 'fence' | 'ice' | 'icicle' | 'snowball' | 'branch' | PowerKind;
 
 interface Obstacle {
   kind: ObstacleKind;
@@ -90,6 +91,7 @@ interface Obstacle {
   bridged?: boolean;
   offset?: number;
   phase?: number;
+  variant?: number;
   pulled?: { x: number; y: number };
   plan?: PlacementMetadata;
 }
@@ -233,12 +235,14 @@ function isRunCheckpoint(value: unknown): value is RunState {
     }
     // Checkpoints are riding-only states; a crash tumble can never be saved.
     if (run.crashReaction !== undefined && run.crashReaction !== null) return false;
-  const kinds: ObstacleKind[] = ['coin', 'rock', 'tree', 'gap', 'ramp', 'log', 'swinging-log', ...POWER_ORDER];
+  const kinds: ObstacleKind[] = ['coin', 'rock', 'tree', 'gap', 'ramp', 'log', 'swinging-log',
+    'root', 'fence', 'ice', 'icicle', 'snowball', 'branch', ...POWER_ORDER];
   if (!Array.isArray(run.objects) || run.objects.length > 2000 || !run.objects.every((object) =>
     object && kinds.includes(object.kind) && finite(object.x)
     && (object.width === undefined || (finite(object.width) && object.width > 0))
     && (object.offset === undefined || finite(object.offset))
     && (object.phase === undefined || finite(object.phase))
+    && (object.variant === undefined || (finite(object.variant) && object.variant >= 0 && object.variant <= 1))
     && (object.bridged === undefined || typeof object.bridged === 'boolean')
     && (object.pulled === undefined || (finite(object.pulled.x) && finite(object.pulled.y)))
     && (object.plan === undefined || validPlacementMetadata(object.plan)))) return false;
@@ -273,6 +277,8 @@ const START_ROLLOUT = 2.2;
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+/** Wrapped angle difference in (-π, π] — used by the ice slip lean. */
+const shortAngleDelta = (angle: number) => Math.atan2(Math.sin(angle), Math.cos(angle));
 
 function hash(value: number): number {
   const n = Math.sin(value * 127.1 + 311.7) * 43758.5453123;
@@ -282,7 +288,8 @@ function hash(value: number): number {
 /** Hazards that demand a committed jump or sweep through the riding line;
  *  these are retired ahead of the rider during the safe final approach. */
 function isDangerousObstacle(object: Obstacle): boolean {
-  return (object.kind === 'gap' && !object.bridged) || object.kind === 'ramp' || object.kind === 'swinging-log';
+  return (object.kind === 'gap' && !object.bridged) || object.kind === 'ramp' || object.kind === 'swinging-log'
+    || object.kind === 'snowball' || object.kind === 'icicle' || object.kind === 'branch';
 }
 
 function colorMix(a: string, b: string, amount: number): string {
@@ -322,7 +329,15 @@ export class SnowGameEngine {
   private bike: BikeEntry = BIKES[0];
   private character: RiderEntry = RIDERS[0];
   private trail: TrailEntry = TRAILS[0];
-  private nextMission = Math.floor(Math.random() * MISSIONS.length);
+  /** Mission rotation slot. Seeded from the journey on the first run so
+   *  identical saves get identical mission sequences (and therefore identical
+   *  score-driven planning); cosmetics stay free to use Math.random. */
+  private nextMission?: number;
+
+  private missionSlotFor(levelSeed: number): number {
+    this.nextMission ??= levelSeed % MISSIONS.length;
+    return this.nextMission;
+  }
 
   setRiderSetup(bike: BikeEntry, character: RiderEntry, trail: TrailEntry = TRAILS[0]): void {
     this.bike = bike;
@@ -342,6 +357,8 @@ export class SnowGameEngine {
   private readonly obstaclePlanner = new ObstaclePlanner();
   private obstacleDebug = false;
   private obstacleRejections: PlacementRejection[] = [];
+  /** Phase 9A dev preview: when set, generation collapses to this obstacle id. */
+  private obstaclePreview?: string;
 
   // Phase 5 — intelligent difficulty & obstacle pacing. The manager emits a
   // pure, viewport-independent directive each planning pass; the planner (not
@@ -372,6 +389,28 @@ export class SnowGameEngine {
   setObstacleDebug(enabled: boolean): void {
     this.obstacleDebug = enabled;
     if (!enabled) this.obstacleRejections = [];
+  }
+
+  /**
+   * Phase 9A audit tool (developer bar, `?dev=1`): restart the run with
+   * generation collapsed to a single obstacle id. Every placement still runs
+   * through the planner's validation pipeline, so previews show real, fair
+   * placements — never hand-spawned objects. Pass null to resume normal mixes.
+   */
+  startObstaclePreview(id: string | null): boolean {
+    if (id !== null && !obstacleReady(id)) return false;
+    this.obstaclePreview = id ?? undefined;
+    this.obstacleRejections = [];
+    if (id === null) {
+      this.start();
+      return true;
+    }
+    // Preview needs a level whose environment actually permits the id; jump to
+    // the first themed level that allows it (in-memory, like the level selector).
+    const target = previewLevelForObstacle(id as ObstacleId);
+    if (target !== this.levels.current.number) this.levels.enterPreview(target);
+    this.start();
+    return true;
   }
 
   /**
@@ -533,7 +572,7 @@ export class SnowGameEngine {
       seed: level.seed,
       distance: 0,
       elapsed: 0,
-      mission: MISSIONS[this.nextMission],
+      mission: MISSIONS[this.missionSlotFor(level.seed)],
       missionComplete: false,
       coins: 0,
       tricks: 0,
@@ -556,7 +595,7 @@ export class SnowGameEngine {
       flipsThisLevel: 0,
       levelReward: null,
     };
-    this.nextMission = (this.nextMission + 1) % MISSIONS.length;
+    this.nextMission = (this.missionSlotFor(level.seed) + 1) % MISSIONS.length;
     this.parked = false;
 
     this.held = false;
@@ -761,7 +800,9 @@ export class SnowGameEngine {
 
     for (let candidate = rider.x + 45; candidate < rider.x + 760; candidate += 18) {
       const blocked = run.objects.some((object) =>
-        (object.kind === 'rock' || object.kind === 'tree' || object.kind === 'log' || object.kind === 'swinging-log' || object.kind === 'ramp' || (object.kind === 'gap' && !object.bridged))
+        (object.kind === 'rock' || object.kind === 'tree' || object.kind === 'log' || object.kind === 'swinging-log' || object.kind === 'ramp'
+          || object.kind === 'root' || object.kind === 'fence' || object.kind === 'snowball' || object.kind === 'icicle' || object.kind === 'branch'
+          || (object.kind === 'gap' && !object.bridged))
           && object.x + (object.kind === 'ramp' ? 100 : object.width ?? 35) >= candidate - 28
           && object.x < candidate + 135,
       );
@@ -911,15 +952,25 @@ export class SnowGameEngine {
     return gap?.bridged ? gap : undefined;
   }
 
+  /** Phase 9A — the ice patch covering x, if any (reduced-traction ground). */
+  private iceAt(run: RunState, x: number): Obstacle | undefined {
+    return run.objects.find((object) => object.kind === 'ice' && x >= object.x && x <= object.x + (object.width ?? 0));
+  }
+
   private bridgeDeck(bridge: Obstacle, x: number): number {
     const width = bridge.width ?? 1;
     const t = (x - bridge.x) / width;
     return lerp(this.terrainAt(bridge.x), this.terrainAt(bridge.x + width), t);
   }
 
+  /** Phase 9A — moving platforms add a deterministic vertical bob to the deck. */
+  private platformDeckOffset(run: RunState, bridge: Obstacle): number {
+    return bridge.plan?.obstacleId === 'moving-platform' ? platformBob(run.elapsed, bridge.phase ?? 0) : 0;
+  }
+
   private rideHeight(run: RunState, x: number): number {
     const bridge = this.bridgeAt(run, x);
-    return bridge ? this.bridgeDeck(bridge, x) : this.terrainAt(x);
+    return bridge ? this.bridgeDeck(bridge, x) + this.platformDeckOffset(run, bridge) : this.terrainAt(x);
   }
 
   private rideAngle(run: RunState, x: number): number {
@@ -986,8 +1037,14 @@ export class SnowGameEngine {
         run.nextPowerX = run.nextHazardX + 1500 + hash(run.nextHazardX) * 800;
       }
       const difficulty = clamp((run.rider.x - run.levelStartX) / 26000, 0, 1);
+      // Dev-only obstacle preview: the whole level collapses to the selected
+      // obstacle id, but every placement still runs the full planner pipeline
+      // (validation, conflicts, spacing) so previews are always fair.
+      const previewLevel = this.obstaclePreview && obstacleReady(this.obstaclePreview)
+        ? { ...this.levels.current, number: 99, allowedObstacles: [this.obstaclePreview as ObstacleId] }
+        : this.levels.current;
       const plan = this.obstaclePlanner.plan({
-        level: this.levels.current,
+        level: previewLevel,
         candidateX: run.nextHazardX,
         riderX: run.rider.x,
         riderSpeed: run.rider.speed,
@@ -1000,7 +1057,7 @@ export class SnowGameEngine {
           { start: run.levelStartX - 120, end: run.levelStartX + 640 },
           ...run.houses.map(house => ({ start: house.x - 300, end: house.x + 300 })),
         ],
-        nearby: run.objects.filter(object => ['rock', 'log', 'tree', 'gap', 'ramp', 'swinging-log'].includes(object.kind)),
+        nearby: run.objects.filter(object => ['rock', 'log', 'tree', 'gap', 'ramp', 'swinging-log', 'root', 'fence', 'ice', 'icicle', 'snowball', 'branch'].includes(object.kind)),
         directive,
         recentPatterns: run.recentPatterns,
       });
@@ -1043,11 +1100,14 @@ export class SnowGameEngine {
       if (object.kind === 'gap') {
         return !object.bridged && x > object.x - 30 && x < object.x + (object.width ?? 60) + 30;
       }
-      if (object.kind !== 'rock' && object.kind !== 'tree' && object.kind !== 'log' && object.kind !== 'swinging-log') {
-        return false;
+      if (object.kind !== 'rock' && object.kind !== 'tree' && object.kind !== 'log' && object.kind !== 'swinging-log'
+        && object.kind !== 'root' && object.kind !== 'fence' && object.kind !== 'snowball') {
+        if (object.kind !== 'icicle' && object.kind !== 'branch') return false;
+        // Falling hazards sweep a narrow drop zone.
+        return Math.abs(object.x - x) <= 50;
       }
       const radius = OBSTACLE_REGISTRY[object.kind].collision?.radius ?? 20;
-      return Math.abs(object.x - x) <= radius + 26;
+      return Math.abs(object.x - x) <= radius + 34;
     });
   }
 
@@ -1109,10 +1169,15 @@ export class SnowGameEngine {
       const slope = Math.tan(rider.rotation);
       const difficulty = clamp(rider.x / 26000, 0, 1);
       const rollout = (run.elapsed - START_PAUSE) / START_ROLLOUT;
+      // Phase 9A — ice patches cut traction: slope input on the speed is
+      // amplified and the lean follows the terrain with a visible slip lag.
+      // The physics stays fully deterministic and controllable — ice patches
+      // are only validated onto gentle, step-free terrain.
+      const onIce = !!this.iceAt(run, rider.x);
       if (rollout < 1) {
         rider.speed = 250 * rollout * rollout * (3 - 2 * rollout);
       } else {
-        rider.speed += (slope * 230 + 8 + difficulty * 9) * delta;
+        rider.speed += (slope * 230 * (onIce ? 1.35 : 1) + 8 + difficulty * 9) * delta;
         rider.speed = clamp(rider.speed, BICYCLE_PHYSICS.minSpeed, BICYCLE_PHYSICS.maxSpeed);
       }
       rider.x += rider.speed * delta;
@@ -1136,7 +1201,10 @@ export class SnowGameEngine {
         this.emit({ type: 'ledge' });
       } else {
         rider.y = this.rideHeight(run, rider.x) - 5;
-        rider.rotation = this.rideAngle(run, rider.x);
+        const targetAngle = this.rideAngle(run, rider.x);
+        rider.rotation = onIce
+          ? rider.rotation + shortAngleDelta(targetAngle - rider.rotation) * (1 - Math.exp(-4.5 * delta))
+          : targetAngle;
       }
     }
 
@@ -1469,7 +1537,38 @@ export class SnowGameEngine {
     if (run.elapsed < run.invulnerableUntil) return false;
     const rider = run.rider;
     for (const object of run.objects) {
-      if (object.kind !== 'rock' && object.kind !== 'tree' && object.kind !== 'log' && object.kind !== 'swinging-log') continue;
+      // Phase 9A — rolling hazard: pose-driven position, resting on the
+      // terrain wherever the patrol has carried it.
+      if (object.kind === 'snowball') {
+        const { radius, height } = OBSTACLE_REGISTRY.snowball.collision!;
+        const slope = (this.terrainAt(object.x + 40) - this.terrainAt(object.x - 40)) / 80;
+        const pose = snowballPose(object.x, slope, run.elapsed, object.phase ?? 0);
+        if (Math.abs(rider.x - pose.x) > radius + BICYCLE_PHYSICS.collisionPadding) continue;
+        const obstacleTop = this.terrainAt(pose.x) - height;
+        if (rider.y + BICYCLE_PHYSICS.collisionBottom > obstacleTop + BICYCLE_PHYSICS.collisionInset) {
+          return this.crashInto(run, object, 'A rolling snowball swept you up.');
+        }
+        continue;
+      }
+      // Phase 9A — overhead falling hazards: only the falling phase collides;
+      // hanging, warning and landed states are safe to pass.
+      if (object.kind === 'icicle' || object.kind === 'branch') {
+        const groundY = this.terrainAt(object.x);
+        const pose = object.kind === 'icicle'
+          ? iciclePose(groundY, run.elapsed, object.phase ?? 0)
+          : branchPose(groundY, run.elapsed, object.phase ?? 0);
+        if (pose.state !== 'falling') continue;
+        const { radius } = OBSTACLE_REGISTRY[object.kind].collision!;
+        if (Math.abs(rider.x - object.x) > radius + BICYCLE_PHYSICS.collisionPadding) continue;
+        // The leading edge must reach the rider's body envelope.
+        const tip = object.kind === 'icicle' ? pose.y : pose.y + 12;
+        if (tip > rider.y - 36 && tip < rider.y + 8) {
+          return this.crashInto(run, object, object.kind === 'icicle' ? 'An icicle dropped onto your line.' : 'A falling branch caught you.');
+        }
+        continue;
+      }
+      if (object.kind !== 'rock' && object.kind !== 'tree' && object.kind !== 'log' && object.kind !== 'swinging-log'
+        && object.kind !== 'root' && object.kind !== 'fence') continue;
       const { radius, height } = OBSTACLE_REGISTRY[object.kind].collision!;
       const groundY = this.terrainAt(object.x);
       const moving = object.kind === 'swinging-log' ? swingingLogPose(object.x, groundY, run.elapsed, object.phase) : undefined;
@@ -1479,21 +1578,33 @@ export class SnowGameEngine {
       const riderBottom = rider.y + BICYCLE_PHYSICS.collisionBottom;
       const belowMovingLog = moving && rider.y - 30 >= moving.y + height / 2;
       if (!belowMovingLog && riderBottom > obstacleTop + BICYCLE_PHYSICS.collisionInset) {
-        if (run.shield) {
-          run.shield = false;
-          run.invulnerableUntil = run.elapsed + 0.65;
-          this.burst(run, rider.x, rider.y - 16, 18, POWERS.shield.color, 130, -55);
-          this.popup(run, rider.x, rider.y - 52, 'SHIELD USED', POWERS.shield.color);
-          return false;
-        }
-        run.shake = 13;
-        this.burst(run, rider.x, rider.y, 28, '#f0f8fa', 205, -135);
-        this.emit({ type: 'crash', kind: object.kind === 'tree' ? 'tree' : 'rock' });
-        this.finishRun(run, object.kind === 'swinging-log' ? 'A swinging log caught your line.' : object.kind === 'log' ? 'A fallen log caught your wheel.' : object.kind === 'tree' ? 'A tree crossed your line.' : 'A rock crossed your line.');
-        return true;
+        const reason = object.kind === 'swinging-log' ? 'A swinging log caught your line.'
+          : object.kind === 'log' ? 'A fallen log caught your wheel.'
+          : object.kind === 'tree' ? 'A tree crossed your line.'
+          : object.kind === 'root' ? 'A tree root caught your wheel.'
+          : object.kind === 'fence' ? 'A fence stopped you cold.'
+          : 'A rock crossed your line.';
+        return this.crashInto(run, object, reason);
       }
     }
     return false;
+  }
+
+  /** Shared shield/crash epilogue for every colliding hazard. */
+  private crashInto(run: RunState, object: Obstacle, reason: string): boolean {
+    const rider = run.rider;
+    if (run.shield) {
+      run.shield = false;
+      run.invulnerableUntil = run.elapsed + 0.65;
+      this.burst(run, rider.x, rider.y - 16, 18, POWERS.shield.color, 130, -55);
+      this.popup(run, rider.x, rider.y - 52, 'SHIELD USED', POWERS.shield.color);
+      return false;
+    }
+    run.shake = 13;
+    this.burst(run, rider.x, rider.y, 28, '#f0f8fa', 205, -135);
+    this.emit({ type: 'crash', kind: object.kind === 'tree' || object.kind === 'root' || object.kind === 'branch' ? 'tree' : 'rock' });
+    this.finishRun(run, reason);
+    return true;
   }
 
   private finishRun(run: RunState, reason: string): void {
@@ -1533,7 +1644,7 @@ export class SnowGameEngine {
       || this.gapAt(run, run.rider.x) || this.rampAt(run, run.rider.x)) return;
     const danger = run.objects.some((object) =>
       (object.plan && run.rider.x >= object.plan.warningStart && run.rider.x <= object.plan.clearUntil)
-      || (['rock', 'tree', 'log', 'swinging-log'].includes(object.kind) && Math.abs(object.x - run.rider.x) < 80));
+      || (['rock', 'tree', 'log', 'swinging-log', 'root', 'fence', 'snowball', 'icicle', 'branch'].includes(object.kind) && Math.abs(object.x - run.rider.x) < 80));
     if (danger) return;
     this.syncLevelScore(run);
     const checkpoint = { ...run, particles: [], trail: [], popups: [] };
@@ -1775,7 +1886,7 @@ export class SnowGameEngine {
     context.lineWidth = 2;
     context.font = '600 10px system-ui';
     context.textAlign = 'right';
-    const label = `› ${upcoming.kind.replace(/-/g, ' ').toUpperCase()} AHEAD`;
+    const label = `› ${(upcoming.plan?.obstacleId ?? upcoming.kind).replace(/-/g, ' ').toUpperCase()} AHEAD`;
     const x = this.width - 18;
     const y = this.height * 0.4;
     context.strokeText(label, x, y);
@@ -1790,11 +1901,12 @@ export class SnowGameEngine {
     context.textAlign = 'left';
     this.drawDifficultyDebug(context, run);
     for (const object of run.objects) {
-      if (!['rock', 'tree', 'log', 'gap', 'ramp', 'swinging-log'].includes(object.kind)) continue;
+      if (!['rock', 'tree', 'log', 'gap', 'ramp', 'swinging-log', 'root', 'fence', 'ice', 'icicle', 'snowball', 'branch'].includes(object.kind)) continue;
       const x = object.x - cameraX;
       if (x < -200 || x > this.width + 200) continue;
       const ground = this.terrainAt(object.x);
       const collision = object.kind === 'rock' || object.kind === 'log' || object.kind === 'tree' || object.kind === 'swinging-log'
+        || object.kind === 'root' || object.kind === 'fence' || object.kind === 'snowball' || object.kind === 'icicle' || object.kind === 'branch'
         ? OBSTACLE_REGISTRY[object.kind].collision : undefined;
       context.strokeStyle = object.bridged ? '#74f0b7' : '#ff8c99';
       if (collision) {
@@ -1802,6 +1914,15 @@ export class SnowGameEngine {
         if (object.kind === 'swinging-log') {
           const pose = swingingLogPose(object.x, ground, run.elapsed, object.phase);
           context.strokeRect(pose.x - cameraX - radius, pose.y - collision.height / 2, radius * 2, collision.height);
+        } else if (object.kind === 'snowball') {
+          const slope = (this.terrainAt(object.x + 40) - this.terrainAt(object.x - 40)) / 80;
+          const pose = snowballPose(object.x, slope, run.elapsed, object.phase ?? 0);
+          context.strokeRect(pose.x - cameraX - radius, this.terrainAt(pose.x) - collision.height, radius * 2, collision.height);
+        } else if (object.kind === 'icicle' || object.kind === 'branch') {
+          const pose = object.kind === 'icicle'
+            ? iciclePose(ground, run.elapsed, object.phase ?? 0)
+            : branchPose(ground, run.elapsed, object.phase ?? 0);
+          if (pose.state === 'falling') context.strokeRect(x - radius, pose.y, radius * 2, collision.height);
         } else {
           context.strokeRect(x - radius, ground - collision.height + BICYCLE_PHYSICS.collisionInset, radius * 2, collision.height + 7);
         }
@@ -2309,11 +2430,22 @@ export class SnowGameEngine {
 
       const power = POWER_ORDER.find((kind) => kind === object.kind);
       if (power) this.drawPower(context, x, groundY - 25, power);
-      if (object.bridged) this.drawBridge(context, object, x);
+      if (object.bridged && object.plan?.obstacleId === 'moving-platform') {
+        this.drawMovingPlatform(context, object, x, run);
+      } else if (object.bridged) {
+        this.drawBridge(context, object, x);
+      }
+      if (object.kind === 'gap' && !object.bridged) this.drawGapVariant(context, object, x);
       if (object.kind === 'ramp') this.drawRamp(context, object, x);
       if (object.kind === 'rock') this.drawRock(context, x, groundY, palette);
       if (object.kind === 'tree') this.drawPine(context, x, groundY, palette);
       if (object.kind === 'log') this.drawSnowyLog(context, x, groundY, palette);
+      if (object.kind === 'root') this.drawRoot(context, x, groundY, palette, object.variant ?? 0.5);
+      if (object.kind === 'fence') this.drawFence(context, x, groundY, palette, object.variant ?? 0.5);
+      if (object.kind === 'ice') this.drawIcePatch(context, object, cameraX);
+      if (object.kind === 'icicle') this.drawIcicle(context, object, cameraX, run);
+      if (object.kind === 'snowball') this.drawSnowball(context, object, cameraX, run);
+      if (object.kind === 'branch') this.drawBranch(context, object, cameraX, run);
       if (object.kind === 'swinging-log') {
         const pose = swingingLogPose(object.x, groundY, run.elapsed, object.phase);
         context.save();
@@ -2602,6 +2734,405 @@ export class SnowGameEngine {
       context.closePath();
       context.fillStyle = colorMix(palette.snow, '#66889a', 0.42);
       context.fill();
+    }
+    context.restore();
+  }
+
+  /** Phase 9A — gnarled tree root: a low ground protrusion for controlled hops. */
+  private drawRoot(context: CanvasRenderingContext2D, x: number, groundY: number, palette: Palette, variant: number): void {
+    const half = 15 + variant * 10;
+    const hump = 9 + (1 - variant) * 4;
+    context.save();
+    context.translate(x, groundY);
+    context.fillStyle = 'rgba(30,55,72,0.14)';
+    context.beginPath();
+    context.ellipse(0, -1, half + 5, 4, 0, 0, TAU);
+    context.fill();
+    context.fillStyle = '#6b4f3d';
+    context.beginPath();
+    context.moveTo(-half, 1);
+    context.bezierCurveTo(-half * 0.55, -hump * 2.1, -half * 0.15, -hump * 2.2, 0, -hump);
+    context.bezierCurveTo(half * 0.4, -hump * 2.2, half * 0.75, -hump * 1.5, half, 1);
+    context.closePath();
+    context.fill();
+    // Knobby ridges follow the crest so the shape reads as buried root, not rock.
+    context.strokeStyle = '#8a6a50';
+    context.lineWidth = 2;
+    context.beginPath();
+    context.moveTo(-half * 0.5, -hump * 0.8);
+    context.quadraticCurveTo(0, -hump * 1.5, half * 0.45, -hump * 0.75);
+    context.stroke();
+    context.strokeStyle = colorMix(palette.snow, '#93a7b5', 0.5);
+    context.lineWidth = 1.6;
+    context.beginPath();
+    context.moveTo(-half * 0.42, -hump * 1.05);
+    context.quadraticCurveTo(0, -hump * 1.85, half * 0.38, -hump * 1.0);
+    context.stroke();
+    context.restore();
+  }
+
+  /** Phase 9A — wooden fence section: a taller static jump with clean clearance. */
+  private drawFence(context: CanvasRenderingContext2D, x: number, groundY: number, palette: Palette, variant: number): void {
+    const rails = variant < 0.5 ? 2 : 3;
+    const height = 44;
+    const half = 20;
+    context.save();
+    context.translate(x, groundY);
+    context.fillStyle = 'rgba(30,55,72,0.14)';
+    context.beginPath();
+    context.ellipse(0, -1, half + 7, 4, 0, 0, TAU);
+    context.fill();
+    // Rails first (behind the posts), slightly weathered wood.
+    for (let index = 0; index < rails; index += 1) {
+      const y = -height + 8 + index * ((height - 14) / Math.max(1, rails - 1));
+      context.fillStyle = index % 2 === 0 ? '#8e7966' : '#9c8874';
+      context.fillRect(-half, y - 3, half * 2, 5.5);
+      context.fillStyle = 'rgba(255,255,255,0.22)';
+      context.fillRect(-half, y - 3, half * 2, 1.4);
+    }
+    // Posts with snow caps in cold palettes.
+    for (const side of [-half, half - 3]) {
+      context.fillStyle = '#7c6753';
+      context.fillRect(side, -height - 4, 5, height + 5);
+      context.fillStyle = 'rgba(255,255,255,0.18)';
+      context.fillRect(side, -height - 4, 1.6, height + 5);
+      context.fillStyle = colorMix(palette.snow, '#aab8c6', 0.35);
+      context.fillRect(side - 1, -height - 7, 7, 3.4);
+    }
+    context.restore();
+  }
+
+  /** Phase 9A — slippery ice patch: a sheen slab hugging the terrain surface. */
+  private drawIcePatch(context: CanvasRenderingContext2D, object: Obstacle, cameraX: number): void {
+    const width = object.width ?? 180;
+    const startX = object.x - cameraX;
+    if (startX + width < -60 || startX > this.width + 60) return;
+    context.save();
+    context.beginPath();
+    context.moveTo(startX, this.terrainAt(object.x));
+    for (let step = 24; step < width; step += 24) {
+      context.lineTo(startX + step, this.terrainAt(object.x + step));
+    }
+    context.lineTo(startX + width, this.terrainAt(object.x + width));
+    context.lineTo(startX + width, this.terrainAt(object.x + width) + 9);
+    context.lineTo(startX, this.terrainAt(object.x) + 9);
+    context.closePath();
+    const sheen = context.createLinearGradient(startX, 0, startX + width, 0);
+    sheen.addColorStop(0, 'rgba(191,230,245,0.18)');
+    sheen.addColorStop(0.5, 'rgba(214,240,250,0.55)');
+    sheen.addColorStop(1, 'rgba(191,230,245,0.18)');
+    context.fillStyle = sheen;
+    context.fill();
+    context.strokeStyle = 'rgba(240,250,255,0.65)';
+    context.lineWidth = 1.4;
+    context.stroke();
+    // Deterministic glints crawl along the patch so it reads as live ice.
+    const phase = (object.phase ?? 0) + this.clock * 0.35;
+    for (let index = 0; index < 3; index += 1) {
+      const t = (phase + index * 0.33) % 1;
+      const glintX = startX + t * width;
+      context.strokeStyle = 'rgba(255,255,255,0.8)';
+      context.lineWidth = 1.2;
+      context.beginPath();
+      context.moveTo(glintX - 5, this.terrainAt(object.x + t * width) - 3);
+      context.lineTo(glintX + 4, this.terrainAt(object.x + t * width) - 8);
+      context.stroke();
+    }
+    context.restore();
+  }
+
+  /** Phase 9A — hanging icicle with shake warning, fall and shatter phases. */
+  private drawIcicle(context: CanvasRenderingContext2D, object: Obstacle, cameraX: number, run: RunState): void {
+    const x = object.x - cameraX;
+    const groundY = this.terrainAt(object.x);
+    const pose = iciclePose(groundY, run.elapsed, object.phase ?? 0);
+    context.save();
+    if (pose.state === 'shattered') {
+      const cycle = (((run.elapsed + (object.phase ?? 0)) % 4.2) + 4.2) % 4.2;
+      const fade = clamp(1 - (cycle - 2.95) / 1.25, 0, 1);
+      context.globalAlpha = fade;
+      context.fillStyle = '#cfe6f2';
+      for (const [offset, size] of [[-11, 4], [-2, 6], [9, 3.5]] as const) {
+        context.beginPath();
+        context.moveTo(x + offset - size, groundY - 1);
+        context.lineTo(x + offset, groundY - 1 - size * 1.6);
+        context.lineTo(x + offset + size, groundY - 1);
+        context.closePath();
+        context.fill();
+      }
+      context.restore();
+      return;
+    }
+    const shake = pose.state === 'shaking' ? Math.sin(run.elapsed * 42) * 2.2 : 0;
+    context.translate(x + shake, 0);
+    // Frozen cornice the icicle hangs from.
+    context.fillStyle = '#5d6b77';
+    context.beginPath();
+    context.moveTo(-24, pose.y - 34);
+    context.lineTo(24, pose.y - 34);
+    context.lineTo(15, pose.y - 25);
+    context.lineTo(-16, pose.y - 25);
+    context.closePath();
+    context.fill();
+    context.fillStyle = colorMix('#e8f2f8', '#ffffff', 0.4);
+    context.fillRect(-24, pose.y - 36, 48, 3);
+    // The icicle itself — bright tip, cool body.
+    const body = context.createLinearGradient(0, pose.y - 26, 0, pose.y);
+    body.addColorStop(0, '#a8cfe2');
+    body.addColorStop(1, '#eef8fd');
+    context.fillStyle = body;
+    context.beginPath();
+    context.moveTo(-7, pose.y - 26);
+    context.lineTo(7, pose.y - 26);
+    context.lineTo(0, pose.y);
+    context.closePath();
+    context.fill();
+    context.strokeStyle = 'rgba(255,255,255,0.9)';
+    context.lineWidth = 1.1;
+    context.beginPath();
+    context.moveTo(-2, pose.y - 24);
+    context.lineTo(-0.5, pose.y - 5);
+    context.stroke();
+    // Warning drips telegraph the drop.
+    if (pose.state === 'shaking') {
+      context.fillStyle = 'rgba(214,240,250,0.85)';
+      for (const [offset, drop] of [[-4, 3], [3, 7]] as const) {
+        context.beginPath();
+        context.arc(offset, pose.y + drop + Math.sin(run.elapsed * 20 + offset) * 1.5, 1.4, 0, TAU);
+        context.fill();
+      }
+    }
+    if (pose.state === 'falling') {
+      context.strokeStyle = 'rgba(238,248,253,0.5)';
+      context.lineWidth = 2;
+      context.beginPath();
+      context.moveTo(0, pose.y - 30);
+      context.lineTo(0, pose.y - 8);
+      context.stroke();
+    }
+    context.restore();
+  }
+
+  /** Phase 9A — rolling snowball with terrain-following patrol and rolling marks. */
+  private drawSnowball(context: CanvasRenderingContext2D, object: Obstacle, cameraX: number, run: RunState): void {
+    const slope = (this.terrainAt(object.x + 40) - this.terrainAt(object.x - 40)) / 80;
+    const pose = snowballPose(object.x, slope, run.elapsed, object.phase ?? 0);
+    const radius = OBSTACLE_REGISTRY.snowball.collision!.radius;
+    const ballX = pose.x - cameraX;
+    const groundY = this.terrainAt(pose.x);
+    const ballY = groundY - radius;
+    context.save();
+    // Deterministic motion ghosts trail the sweep direction.
+    for (const [lag, alpha] of [[0.16, 0.16], [0.32, 0.08]] as const) {
+      const ghost = snowballPose(object.x, slope, run.elapsed - lag, object.phase ?? 0);
+      context.globalAlpha = alpha;
+      context.fillStyle = '#dce9f2';
+      context.beginPath();
+      context.arc(ghost.x - cameraX, this.terrainAt(ghost.x) - radius, radius * 0.9, 0, TAU);
+      context.fill();
+    }
+    context.globalAlpha = 1;
+    // Contact shadow.
+    context.fillStyle = 'rgba(30,55,72,0.18)';
+    context.beginPath();
+    context.ellipse(ballX, groundY + 1, radius * 0.95, 4, 0, 0, TAU);
+    context.fill();
+    // Ball body with a cool snow gradient.
+    const ball = context.createRadialGradient(ballX - radius * 0.35, ballY - radius * 0.4, radius * 0.2, ballX, ballY, radius);
+    ball.addColorStop(0, '#fdfeff');
+    ball.addColorStop(1, '#c4d6e4');
+    context.fillStyle = ball;
+    context.beginPath();
+    context.arc(ballX, ballY, radius, 0, TAU);
+    context.fill();
+    // Rolling marks rotate with the sweep so the motion reads as rolling.
+    context.save();
+    context.translate(ballX, ballY);
+    context.rotate(pose.rotation);
+    context.strokeStyle = 'rgba(140,168,190,0.55)';
+    context.lineWidth = 1.6;
+    for (const [dx, dy] of [[0, -radius * 0.55], [-radius * 0.5, radius * 0.3], [radius * 0.5, radius * 0.3]] as const) {
+      context.beginPath();
+      context.arc(dx, dy, radius * 0.22, 0, Math.PI * 1.2);
+      context.stroke();
+    }
+    context.restore();
+    // Snow spray kicks up along the ground contact when the ball moves fast.
+    const speed = Math.abs(Math.cos(run.elapsed * 0.85 + (object.phase ?? 0)));
+    if (speed > 0.55) {
+      context.fillStyle = 'rgba(240,248,255,0.7)';
+      const direction = Math.sign(Math.cos(run.elapsed * 0.85 + (object.phase ?? 0))) || 1;
+      for (const [offset, lift] of [[radius * 0.8, 3], [radius * 1.25, 6]] as const) {
+        context.beginPath();
+        context.arc(ballX - direction * offset, groundY - lift, 1.6, 0, TAU);
+        context.fill();
+      }
+    }
+    context.restore();
+  }
+
+  /** Phase 9A — falling branch with leaf-drift warning cue (moonlit forests). */
+  private drawBranch(context: CanvasRenderingContext2D, object: Obstacle, cameraX: number, run: RunState): void {
+    const x = object.x - cameraX;
+    const groundY = this.terrainAt(object.x);
+    const pose = branchPose(groundY, run.elapsed, object.phase ?? 0);
+    context.save();
+    if (pose.state === 'landed') {
+      const cycle = (((run.elapsed + (object.phase ?? 0)) % 5) + 5) % 5;
+      context.globalAlpha = clamp(1 - (cycle - 3.9) / 1.1, 0, 1);
+    }
+    const shake = pose.state === 'shaking' ? Math.sin(run.elapsed * 34) * 1.8 : 0;
+    context.translate(x + shake, pose.y);
+    if (pose.state === 'hanging' || pose.state === 'shaking') {
+      // Canopy silhouette the branch detaches from.
+      context.fillStyle = 'rgba(38,56,47,0.9)';
+      context.beginPath();
+      context.ellipse(6, -26, 34, 13, 0.1, 0, TAU);
+      context.fill();
+      context.fillStyle = 'rgba(52,74,62,0.75)';
+      context.beginPath();
+      context.ellipse(-14, -20, 22, 9, -0.08, 0, TAU);
+      context.fill();
+    }
+    context.rotate(pose.angle);
+    // Woody limb.
+    context.strokeStyle = '#6f5a44';
+    context.lineWidth = 4.5;
+    context.lineCap = 'round';
+    context.beginPath();
+    context.moveTo(-26, 0);
+    context.quadraticCurveTo(0, -3, 26, 1);
+    context.stroke();
+    // Twigs and leaf clumps.
+    context.lineWidth = 2.2;
+    context.beginPath();
+    context.moveTo(-8, -1);
+    context.lineTo(-14, -9);
+    context.moveTo(10, 0);
+    context.lineTo(16, -8);
+    context.stroke();
+    context.fillStyle = '#41584a';
+    for (const [dx, dy, r] of [[-15, -11, 5.5], [2, -4, 6.5], [19, -10, 5]] as const) {
+      context.beginPath();
+      context.arc(dx, dy, r, 0, TAU);
+      context.fill();
+    }
+    context.restore();
+    // Warning cue: leaves drift loose from the canopy before the drop.
+    if (pose.state === 'shaking') {
+      context.save();
+      context.fillStyle = 'rgba(112,138,116,0.85)';
+      for (const [offset, lag] of [[-14, 0], [4, 0.4], [16, 0.8]] as const) {
+        const drift = ((run.elapsed * 1.4 + lag) % 1);
+        context.beginPath();
+        context.ellipse(x + offset + Math.sin(run.elapsed * 3 + lag * 5) * 4,
+          groundY - 96 + drift * 34, 3, 1.6, drift * 2, 0, TAU);
+        context.fill();
+      }
+      context.restore();
+    }
+  }
+
+  /** Phase 9A — bobbing platform bridging its gap with an underglow. */
+  private drawMovingPlatform(context: CanvasRenderingContext2D, platform: Obstacle, x: number, run: RunState): void {
+    const width = platform.width ?? 1;
+    const bob = platformBob(run.elapsed, platform.phase ?? 0);
+    const deckY = (t: number) => this.bridgeDeck(platform, platform.x + width * t) + bob;
+    context.save();
+    // Underglow marks the platform as the safe line over the gorge.
+    const glow = context.createLinearGradient(0, deckY(0.5) + 6, 0, deckY(0.5) + 44);
+    glow.addColorStop(0, 'rgba(111,227,255,0.30)');
+    glow.addColorStop(1, 'rgba(111,227,255,0)');
+    context.fillStyle = glow;
+    context.fillRect(x - 4, deckY(0.5) + 6, width + 8, 40);
+    // Stone slab deck.
+    context.beginPath();
+    context.moveTo(x, deckY(0));
+    for (let t = 0.25; t <= 1; t += 0.25) context.lineTo(x + width * t, deckY(t));
+    context.lineTo(x + width, deckY(1) + 9);
+    for (let t = 0.75; t >= 0; t -= 0.25) context.lineTo(x + width * t, deckY(t) + 9);
+    context.closePath();
+    const slab = context.createLinearGradient(0, deckY(0), 0, deckY(0) + 9);
+    slab.addColorStop(0, '#b7c4d1');
+    slab.addColorStop(1, '#6f7f8f');
+    context.fillStyle = slab;
+    context.fill();
+    context.strokeStyle = 'rgba(238,246,252,0.8)';
+    context.lineWidth = 1.6;
+    context.beginPath();
+    context.moveTo(x, deckY(0));
+    context.lineTo(x + width, deckY(1));
+    context.stroke();
+    // Side skirt + rune lights that pulse with the bob.
+    context.fillStyle = '#55636f';
+    context.fillRect(x + 4, deckY(0.5) + 9, width - 8, 4);
+    const pulse = 0.5 + bob / 10;
+    context.fillStyle = `rgba(111,227,255,${0.5 + pulse * 0.4})`;
+    for (const t of [0.22, 0.5, 0.78]) {
+      context.beginPath();
+      context.arc(x + width * t, deckY(t) + 3.5, 1.8, 0, TAU);
+      context.fill();
+    }
+    // End rails.
+    context.strokeStyle = '#8d9aa8';
+    context.lineWidth = 2.4;
+    for (const end of [0, 1]) {
+      context.beginPath();
+      context.moveTo(x + width * end, deckY(end));
+      context.lineTo(x + width * end, deckY(end) - 10);
+      context.stroke();
+    }
+    context.restore();
+  }
+
+  /** Phase 9A — cliff and broken-bridge dressing over the standard gorge. */
+  private drawGapVariant(context: CanvasRenderingContext2D, object: Obstacle, x: number): void {
+    const width = object.width ?? 0;
+    const leftY = this.terrainAt(object.x);
+    const rightY = this.terrainAt(object.x + width);
+    context.save();
+    if (object.plan?.obstacleId === 'cliff') {
+      // Sheer strata bands carve the gorge walls into a rock cliff face.
+      context.strokeStyle = 'rgba(255,255,255,0.16)';
+      context.lineWidth = 2;
+      for (let index = 0; index < 3; index += 1) {
+        const y = 10 + index * 13;
+        context.beginPath();
+        context.moveTo(x + 8, leftY + y);
+        context.lineTo(x + 8 + 16 + index * 7, leftY + y - 3);
+        context.moveTo(x + width - 8, rightY + y);
+        context.lineTo(x + width - 8 - 14 - index * 6, rightY + y - 3);
+        context.stroke();
+      }
+      // Hard rim highlights on both lips.
+      context.strokeStyle = 'rgba(255,255,255,0.75)';
+      context.lineWidth = 2.6;
+      context.beginPath();
+      context.moveTo(x - 14, leftY + 1);
+      context.lineTo(x, leftY - 3);
+      context.moveTo(x + width, rightY - 3);
+      context.lineTo(x + width + 14, rightY + 1);
+      context.stroke();
+    } else if (object.plan?.obstacleId === 'broken-bridge') {
+      // Frayed plank stubs on both lips — the bridge that used to be here.
+      context.lineCap = 'butt';
+      for (const [edge, edgeY, direction] of [[0, leftY, 1], [width, rightY, -1]] as const) {
+        for (const [lift, reach] of [[-4, 26], [-12, 18]] as const) {
+          context.fillStyle = '#8e7966';
+          context.fillRect(x + edge + (direction === 1 ? 0 : -reach), edgeY + lift - 2.5, reach, 5);
+          context.fillStyle = 'rgba(255,255,255,0.2)';
+          context.fillRect(x + edge + (direction === 1 ? 0 : -reach), edgeY + lift - 2.5, reach, 1.3);
+        }
+        // Broken post stump with a frayed rope end.
+        context.fillStyle = '#7c6753';
+        context.fillRect(x + edge - 2.5 + direction * 8, edgeY - 22, 5, 22);
+        context.strokeStyle = '#a7845e';
+        context.lineWidth = 1.8;
+        context.beginPath();
+        context.moveTo(x + edge + direction * 8, edgeY - 18);
+        context.quadraticCurveTo(x + edge + direction * 22, edgeY - 26, x + edge + direction * 30, edgeY - 14);
+        context.stroke();
+      }
     }
     context.restore();
   }

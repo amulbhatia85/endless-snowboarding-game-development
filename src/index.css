@@ -1865,3 +1865,16 @@ kbd {
   flex-wrap: wrap;
 }
 .crash-secondary .end-run-button { margin-top: 0; }
+
+/* Phase 9A — developer obstacle preview selector (dev bar, ?dev=1 only). */
+.dev-obstacle-select {
+  padding: 4px 8px;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  cursor: pointer;
+}
+.dev-obstacle-select option {
+  color: #22344d;
+  background: #f4f7fb;
+}

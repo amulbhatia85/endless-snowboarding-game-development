@@ -22,11 +22,21 @@ export interface LevelConfiguration {
 
 const THEMES: readonly EnvironmentTheme[] = ['countryside', 'snowy-mountains', 'misty-mountains', 'moonlit-forest'];
 const THEME_CONFIG = {
-  countryside: { name: 'Green Hills', obstacles: ['rock', 'log', 'tree', 'fence', 'ramp', 'gap', 'bridge'], weather: 'clear', intensity: 0, speed: 1 },
+  countryside: { name: 'Green Hills', obstacles: ['rock', 'log', 'tree', 'root', 'fence', 'ramp', 'gap', 'bridge'], weather: 'clear', intensity: 0, speed: 1 },
   'snowy-mountains': { name: 'Snowfall Adventure', obstacles: ['rock', 'log', 'ice', 'icicle', 'snowball', 'gap', 'ramp', 'bridge'], weather: 'snow', intensity: 0.5, speed: 0.38 },
   'misty-mountains': { name: 'Misty Mountains', obstacles: ['rock', 'gap', 'cliff', 'bridge', 'broken-bridge', 'ramp', 'log', 'moving-platform'], weather: 'mist', intensity: 0.4, speed: 0.4 },
   'moonlit-forest': { name: 'Moonlit Forest', obstacles: ['tree', 'rock', 'root', 'branch', 'log', 'swinging-log', 'gap'], weather: 'night', intensity: 0.35, speed: 0.5 },
 } as const;
+
+/**
+ * Phase 9A audit tool: the first themed level (1–4) whose environment permits
+ * this obstacle id — drives the developer obstacle preview so every id is
+ * shown in a level that can actually generate it.
+ */
+export function previewLevelForObstacle(id: ObstacleId): number {
+  const index = THEMES.findIndex(theme => (THEME_CONFIG[theme].obstacles as readonly string[]).includes(id));
+  return index === -1 ? 1 : index + 1;
+}
 
 function positiveInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;

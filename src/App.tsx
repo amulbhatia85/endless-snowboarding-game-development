@@ -155,6 +155,25 @@ const DEV_LEVELS: { level: number; label: string }[] = [
   { level: 3, label: 'Misty Mountains' },
   { level: 4, label: 'Moonlit Forest' },
 ];
+// Phase 9A audit tool: per-obstacle preview ids (validated placements only).
+const DEV_OBSTACLES: { id: string; label: string }[] = [
+  { id: 'rock', label: 'Rock' },
+  { id: 'log', label: 'Log' },
+  { id: 'tree', label: 'Tree' },
+  { id: 'root', label: 'Root' },
+  { id: 'fence', label: 'Fence' },
+  { id: 'gap', label: 'Gap' },
+  { id: 'cliff', label: 'Cliff' },
+  { id: 'bridge', label: 'Rope bridge' },
+  { id: 'broken-bridge', label: 'Broken bridge' },
+  { id: 'moving-platform', label: 'Moving platform' },
+  { id: 'ramp', label: 'Ramp' },
+  { id: 'ice', label: 'Ice patch' },
+  { id: 'icicle', label: 'Icicle' },
+  { id: 'snowball', label: 'Snowball' },
+  { id: 'swinging-log', label: 'Swinging log' },
+  { id: 'branch', label: 'Falling branch' },
+];
 
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -179,6 +198,7 @@ export default function App() {
     ?? { balance: 0, lifetimeEarned: 0, owned: [] as readonly string[], rewardedThrough: 0 });
   const [splashDone, setSplashDone] = useState(false);
   const [hasParkedRun, setHasParkedRun] = useState(false);
+  const [obstaclePreview, setObstaclePreview] = useState('');
   const [rewardedReady, setRewardedReady] = useState(false);
   const [adBusy, setAdBusy] = useState(false);
   const [adNotice, setAdNotice] = useState('');
@@ -640,6 +660,22 @@ export default function App() {
     engine.devFinishLevel();
   };
 
+  // Phase 9A dev tool: preview a single obstacle type end to end. Generation
+  // collapses to the chosen id but keeps running through the planner's full
+  // validation pipeline; empty selection restores the normal mix.
+  const previewObstacle = (id: string) => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    audio.click();
+    setObstaclePreview(id);
+    setResult(null);
+    setCrashResult(null);
+    setShowSettings(false);
+    setMenuView('home');
+    setHasParkedRun(false);
+    if (!engine.startObstaclePreview(id || null)) setObstaclePreview('');
+  };
+
   const togglePause = () => engineRef.current?.togglePause();
 
   const continueParkedRun = () => {
@@ -825,6 +861,17 @@ export default function App() {
           <button type="button" className="dev-level-button dev-finish" onClick={finishLevelForTest}>
             ⏭ Finish level
           </button>
+          <select
+            className="dev-level-button dev-obstacle-select"
+            aria-label="Developer obstacle preview (validated single-obstacle generation)"
+            value={obstaclePreview}
+            onChange={(event) => previewObstacle(event.target.value)}
+          >
+            <option value="">Obstacle mix…</option>
+            {DEV_OBSTACLES.map(({ id, label }) => (
+              <option key={id} value={id}>{label}</option>
+            ))}
+          </select>
         </div>
       )}
 

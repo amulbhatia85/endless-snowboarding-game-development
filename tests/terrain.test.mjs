@@ -4,7 +4,7 @@ import { performance } from 'node:perf_hooks';
 import { moduleUrl } from './loadTypeScript.mjs';
 
 const { generateLevel, LEVEL_SAVE_KEY } = await import(moduleUrl('src/game/levelManager.ts'));
-const { TerrainGenerator, TerrainWorld, TERRAIN_CHUNK_WIDTH: WIDTH, TERRAIN_MAX_SLOPE, validateGap, validateRamp, validateObstacle } = await import(moduleUrl('src/game/terrain.ts'));
+const { TerrainGenerator, TerrainWorld, TERRAIN_CHUNK_WIDTH: WIDTH, TERRAIN_MAX_SLOPE, validateGap, validateRamp, validateObstacle , validateIcePatch, validateSnowball, validateFallingHazard } = await import(moduleUrl('src/game/terrain.ts'));
 const { SnowGameEngine } = await import(moduleUrl('src/game/engine.ts'));
 
 function memoryStorage() {
@@ -198,7 +198,7 @@ test('Generated hazards reserve their validated landing corridors', () => {
     game.populateAhead(run);
     game.terrain.maintain(run.cameraX, 900);
     for (const obstacle of run.objects) {
-      if (['rock', 'tree', 'log', 'gap', 'ramp'].includes(obstacle.kind)
+      if (['rock', 'tree', 'log', 'gap', 'ramp', 'root', 'fence', 'ice', 'icicle', 'snowball', 'branch'].includes(obstacle.kind)
         && !hazards.some(item => item.x === obstacle.x)) hazards.push({ ...obstacle });
     }
   }
@@ -211,7 +211,10 @@ test('Generated hazards reserve their validated landing corridors', () => {
     const validation = obstacle.kind === 'gap' && !obstacle.bridged
       ? validateGap(surface, obstacle.x, obstacle.width)
       : obstacle.kind === 'ramp' ? validateRamp(surface, obstacle.x)
-      : ['rock', 'tree', 'log'].includes(obstacle.kind) ? validateObstacle(surface, obstacle.x, obstacle.kind) : null;
+      : ['rock', 'tree', 'log', 'root', 'fence'].includes(obstacle.kind) ? validateObstacle(surface, obstacle.x, obstacle.kind)
+      : obstacle.kind === 'ice' ? validateIcePatch(surface, obstacle.x, obstacle.width)
+      : obstacle.kind === 'snowball' ? validateSnowball(surface, obstacle.x)
+      : (obstacle.kind === 'icicle' || obstacle.kind === 'branch') ? validateFallingHazard(surface, obstacle.x) : null;
     if (!validation) continue;
     if (obstacle.kind === 'gap') gaps++;
     assert.equal(validation.safe, true);

@@ -4,6 +4,7 @@ import { BICYCLE_PHYSICS } from './riderPhysics';
 import type { DifficultyDirective } from './difficulty';
 import {
   validateGap, validateRamp, validateBridge, validateObstacle, validateRampGap, validateSwingingLog,
+  validateIcePatch, validateFallingHazard, validateSnowball,
   type LandingValidation, type TraversalOptions,
 } from './terrain';
 
@@ -18,11 +19,14 @@ export interface PlacementMetadata {
   spacing: number;
 }
 export interface PlannedObstacle {
-  kind: 'rock' | 'log' | 'tree' | 'gap' | 'ramp' | 'swinging-log';
+  kind: 'rock' | 'log' | 'tree' | 'gap' | 'ramp' | 'swinging-log'
+    | 'root' | 'fence' | 'ice' | 'icicle' | 'snowball' | 'branch';
   x: number;
   width?: number;
   bridged?: boolean;
   phase?: number;
+  /** Seeded 0..1 draw driving per-instance visual variation (sizes, shapes, rails). */
+  variant?: number;
   plan: PlacementMetadata;
 }
 export interface PlacementRejection { x: number; patternId: string; reason: string }
@@ -57,6 +61,21 @@ export const OBSTACLE_PATTERNS: readonly Pattern[] = [
   { id: 'double-logs', minLevel: 3, weight: 16, requires: ['log'], sequence: ['log', 'log'], rating: 0.55 },
   { id: 'ramp-gap', minLevel: 4, weight: 9, requires: ['ramp', 'gap'], sequence: ['ramp', 'gap'], rating: 0.78, coupled: true },
   { id: 'advanced-static-sequence', minLevel: 6, weight: 13, requires: ['rock', 'log'], sequence: ['rock', 'log', 'rock'], rating: 0.7 },
+  // Phase 9A — expanded library. Roots and fences are static jump obstacles,
+  // ice is a reduced-traction ground patch, icicles/branches/snowballs are
+  // timed moving hazards with visible warning cues, cliffs and broken bridges
+  // are gap variants, and the moving platform is a bobbing bridged gap.
+  { id: 'single-root', minLevel: 1, weight: 18, requires: ['root'], sequence: ['root'], rating: 0.06 },
+  { id: 'root-pair', minLevel: 3, weight: 10, requires: ['root'], sequence: ['root', 'root'], rating: 0.34 },
+  { id: 'single-fence', minLevel: 2, weight: 13, requires: ['fence'], sequence: ['fence'], rating: 0.3 },
+  { id: 'fence-then-rock', minLevel: 5, weight: 7, requires: ['fence', 'rock'], sequence: ['fence', 'rock'], rating: 0.6 },
+  { id: 'ice-patch', minLevel: 2, weight: 9, requires: ['ice'], sequence: ['ice'], rating: 0.18 },
+  { id: 'icicle-drop', minLevel: 6, weight: 8, requires: ['icicle'], sequence: ['icicle'], rating: 0.62 },
+  { id: 'snowball-roll', minLevel: 5, weight: 8, requires: ['snowball'], sequence: ['snowball'], rating: 0.74 },
+  { id: 'cliff-jump', minLevel: 7, weight: 7, requires: ['cliff'], sequence: ['cliff'], rating: 0.85 },
+  { id: 'broken-bridge', minLevel: 6, weight: 7, requires: ['broken-bridge'], sequence: ['broken-bridge'], rating: 0.8 },
+  { id: 'moving-platform', minLevel: 6, weight: 6, requires: ['moving-platform'], sequence: ['moving-platform'], rating: 0.66 },
+  { id: 'falling-branch', minLevel: 6, weight: 8, requires: ['branch'], sequence: ['branch'], rating: 0.78 },
   // Moving hazards require a complete renderer, collider, warning and validated envelope.
   { id: 'warned-swinging-log', minLevel: 8, weight: 10, requires: ['swinging-log'], sequence: ['swinging-log'], rating: 0.85 },
 ];
@@ -66,16 +85,23 @@ export function patternRating(id: string): number | undefined {
   return OBSTACLE_PATTERNS.find(pattern => pattern.id === id)?.rating;
 }
 
+/** Obstacle ids whose patterns demand a clean takeoff corridor or sweep/telegraph a hazard. */
+const DANGEROUS_REQUIRES: ReadonlySet<string> = new Set([
+  'gap', 'ramp', 'swinging-log', 'cliff', 'broken-bridge', 'moving-platform',
+  'snowball', 'icicle', 'branch',
+]);
+
 /**
  * Dangerous patterns demand a clean takeoff corridor or sweep a moving hazard:
- * gaps, ramps, swinging logs and multi-obstacle combinations. The safe final
- * approach (45 k → house) refuses to schedule any of them.
+ * gaps, ramps, swinging logs, cliff/bridge variants, timed hazards and
+ * multi-obstacle combinations. The safe final approach (45 k → house) refuses
+ * to schedule any of them.
  */
 export function patternIsDangerous(id: string): boolean {
   const pattern = OBSTACLE_PATTERNS.find(item => item.id === id);
   if (!pattern) return false;
   return pattern.coupled === true || pattern.sequence.length > 1
-    || pattern.requires.some(id => id === 'gap' || id === 'ramp' || id === 'swinging-log');
+    || pattern.requires.some(id => DANGEROUS_REQUIRES.has(id));
 }
 
 export interface PlanningContext {
@@ -232,6 +258,33 @@ export class ObstaclePlanner {
         };
         kind = 'gap';
         bridged = true;
+      } else if (id === 'moving-platform') {
+        // A bobbing platform fully covers its gap: same guaranteed-support
+        // mechanics as the rope bridge, with a vertical bob for timing read.
+        width = 128 + random() * 34;
+        if (!validateBridge(surface, x, width)) return 'Moving-platform deck slope outside safe limits';
+        validation = {
+          safe: true, clearUntil: x + width + 180,
+          takeoff: { start: x - 35, end: x },
+          landing: { start: x + width, end: x + width + 90 },
+        };
+        kind = 'gap';
+        bridged = true;
+      } else if (id === 'cliff' || id === 'broken-bridge') {
+        // Sheer-face and plank-stub variants of the validated gap envelope.
+        width = id === 'cliff' ? 106 + random() * 44 : 88 + random() * 34;
+        validation = validateGap(surface, x, width, options);
+        kind = 'gap';
+      } else if (id === 'ice') {
+        width = 150 + random() * 110;
+        validation = validateIcePatch(surface, x, width);
+        kind = 'ice';
+      } else if (id === 'icicle' || id === 'branch') {
+        validation = validateFallingHazard(surface, x);
+        kind = id;
+      } else if (id === 'snowball') {
+        validation = validateSnowball(surface, x, options);
+        kind = id;
       } else if (id === 'gap') {
         width = 82 + random() * 48;
         validation = validateGap(surface, x, width, options);
@@ -270,7 +323,12 @@ export class ObstaclePlanner {
         const previous = obstacles[obstacles.length - 1];
         metadata.spacing = x - previous.x - (previous.width ?? 40);
       }
-      obstacles.push({ kind, x, width, bridged, plan: metadata, phase: id === 'swinging-log' ? random() * Math.PI * 2 : undefined });
+      obstacles.push({
+        kind, x, width, bridged, plan: metadata, variant: random(),
+        phase: id === 'swinging-log' || id === 'icicle' || id === 'snowball' || id === 'branch' || id === 'moving-platform'
+          ? random() * Math.PI * 2
+          : undefined,
+      });
       clearUntil = validation.clearUntil;
       // Separate the next obstacle's takeoff from the previous landing and recovery.
       x = clearUntil + reactionDistance + 110;
@@ -303,7 +361,7 @@ export class ObstaclePlanner {
     const footprint = { start: Math.min(x - 40, plan.takeoff.start), end: Math.max(end, plan.clearUntil) };
     if (context.reserved.some(region => overlap(footprint, region))) return 'Pattern overlaps a protected start/house area';
     for (const nearby of context.nearby) {
-      if (!['rock', 'tree', 'log', 'gap', 'ramp', 'swinging-log'].includes(nearby.kind)) continue;
+      if (!['rock', 'tree', 'log', 'gap', 'ramp', 'swinging-log', 'root', 'fence', 'ice', 'icicle', 'snowball', 'branch'].includes(nearby.kind)) continue;
       const occupied = { start: nearby.plan?.takeoff.start ?? nearby.x - 120, end: nearby.plan?.clearUntil ?? nearby.x + (nearby.width ?? 40) + 150 };
       if (overlap(footprint, occupied)) return 'Nearby obstacle conflicts with this traversal corridor';
     }
