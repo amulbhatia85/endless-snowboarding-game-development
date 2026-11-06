@@ -513,7 +513,16 @@ export class SnowGameEngine {
   }
 
   press(): void {
-    if (this.status !== 'playing' || this.run?.levelPhase !== 'riding') return;
+    if (this.status !== 'playing' || !this.run) return;
+    // Phase 6: during the completion hold a press continues to the next
+    // level early (a short grace keeps entry taps from skipping the screen).
+    if (this.run.levelPhase === 'celebrating') {
+      if (this.run.sceneTime >= 1.1) {
+        this.run.sceneTime = Math.max(this.run.sceneTime, this.levels.current.transitions.end.completionSeconds);
+      }
+      return;
+    }
+    if (this.run.levelPhase !== 'riding') return;
     if (!this.held) {
       this.jumpQueued = true;
       this.pressedAt = this.clock;
@@ -590,6 +599,23 @@ export class SnowGameEngine {
     this.levels.restartAttempt();
     this.setStatus('gameover');
     this.callbacks.onGameOver(result);
+  }
+
+  /**
+   * Phase 6 developer tool (`?dev=1`): fast-forward the score to the level
+   * target so the final approach can be tested without earning 50 000
+   * points. The arrival itself then runs through the normal cinematic path.
+   */
+  devFinishLevel(): boolean {
+    const run = this.run;
+    if (this.status !== 'playing' || !run || run.over || run.levelPhase !== 'riding') return false;
+    const earned = this.runScore(run) - run.levelStartScore;
+    const target = this.levels.current.targetScore;
+    if (earned < target) {
+      run.bonus += target - earned + 250;
+      this.syncLevelScore(run);
+    }
+    return true;
   }
 
   revive(): boolean {
@@ -714,8 +740,10 @@ export class SnowGameEngine {
     const base = this.baseTerrainAt(x);
     for (const house of this.run?.houses ?? []) {
       const distance = Math.abs(x - house.x);
-      if (distance >= 300) continue;
-      const t = clamp((distance - 95) / 205, 0, 1);
+      // Phase 6: a wider, C1-continuous blend gives the arrival a naturally
+      // smooth runway into the house's flat ground.
+      if (distance >= 380) continue;
+      const t = clamp((distance - 95) / 285, 0, 1);
       return lerp(house.groundY, base, t * t * (3 - 2 * t));
     }
     return base;
@@ -1044,7 +1072,10 @@ export class SnowGameEngine {
   }
 
   private beginLevelArrival(run: RunState): void {
-    const x = run.rider.x + Math.max(420, this.width * 0.65);
+    // Phase 6: spawn the house beyond the right edge of the visible screen
+    // (rider sits ≥ 0.28 widths from the left, so ≥ 1.05 widths is always
+    // off-screen) — it scrolls into view naturally, never pops in.
+    const x = run.rider.x + Math.max(760, this.width * 1.05);
     const house = { x, groundY: this.baseTerrainAt(x) };
     run.houses = run.houses.filter((existing) => existing.x > run.rider.x - this.width * 2 - 300);
     run.houses.push(house);
@@ -1493,7 +1524,7 @@ export class SnowGameEngine {
     this.environment.drawBackground(context, view, palette);
     if (!isMenu) {
       this.drawStartWindmill(context, cameraX, run.elapsed);
-      for (const house of run.houses) this.drawFinishHouse(context, house, cameraX);
+      for (const house of run.houses) this.drawFinishHouse(context, house, cameraX, run);
     }
     this.drawTerrain(context, width, height, cameraX, palette, run);
     this.environment.drawDecorations(context, view, this.decorationReserved);
@@ -1735,15 +1766,58 @@ export class SnowGameEngine {
     context.restore();
   }
 
-  private drawFinishHouse(context: CanvasRenderingContext2D, house: FinishHouse, cameraX: number): void {
+  /**
+   * Phase 6 cinematic: the active house's door openness, 0 (closed) .. 1
+   * (open). Derived purely from the scene state so it stays deterministic:
+   * it opens as the rider closes in, shuts behind them after entry, reopens
+   * for the exit and closes once the rider has ridden clear.
+   */
+  private houseDoorOpenness(run: RunState, house: FinishHouse): number {
+    if (run.houses[run.houses.length - 1] !== house) return 0;
+    const ease = (t: number) => t * t * (3 - 2 * t);
+    const doorX = house.x + 24;
+    switch (run.levelPhase) {
+      case 'approach': {
+        const remaining = doorX - 18 - run.rider.x;
+        return ease(clamp((240 - remaining) / 240, 0, 1));
+      }
+      case 'entering':
+        return 1;
+      case 'celebrating':
+        return 1 - ease(clamp((run.sceneTime - 0.55) / 0.6, 0, 1));
+      case 'exiting': {
+        const gone = run.rider.x - doorX;
+        return gone < 70 ? 1 : 1 - ease(clamp((gone - 70) / 160, 0, 1));
+      }
+      default:
+        return 0;
+    }
+  }
+
+  private drawFinishHouse(context: CanvasRenderingContext2D, house: FinishHouse, cameraX: number, run: RunState): void {
     const x = house.x - cameraX;
-    if (x < -120 || x > this.width + 120) return;
+    if (x < -170 || x > this.width + 170) return;
+    const door = this.houseDoorOpenness(run, house);
+    const theme = this.levels.current.environment;
+    const night = this.lastNight;
+    // Warm light reads stronger after dusk and while the door is open.
+    const warm = clamp(0.45 + 0.55 * night + 0.2 * door, 0, 1);
+    const flicker = 0.88 + 0.12 * Math.sin(this.clock * 2.1 + house.x * 0.13);
     context.save();
     context.translate(x, house.groundY + 4);
 
+    // Ambient light spilling from the house onto the surroundings.
+    const halo = context.createRadialGradient(18, -30, 10, 18, -30, theme === 'misty-mountains' ? 150 : 120);
+    halo.addColorStop(0, `rgba(255, 205, 130, ${0.2 * warm * flicker})`);
+    halo.addColorStop(1, 'rgba(255, 205, 130, 0)');
+    context.fillStyle = halo;
+    context.fillRect(-140, -150, 320, 160);
+
+    // Subtle chimney smoke — lazier and softer in the mist.
+    const smokeAlpha = theme === 'misty-mountains' ? 0.17 : 0.25;
     for (let i = 0; i < 5; i += 1) {
       const t = (this.clock * 0.17 + i / 5) % 1;
-      context.fillStyle = `rgba(224,236,244,${0.25 * Math.sin(t * Math.PI)})`;
+      context.fillStyle = `rgba(224,236,244,${smokeAlpha * Math.sin(t * Math.PI)})`;
       context.beginPath();
       context.ellipse(-24 + t * 28, -128 - t * 42, 3 + t * 10, 3 + t * 6, 0.2, 0, TAU);
       context.fill();
@@ -1774,9 +1848,57 @@ export class SnowGameEngine {
     context.lineTo(71, -83);
     context.stroke();
 
+    // Environment-specific dressing: snow accumulation in the mountains.
+    if (theme === 'snowy-mountains') {
+      context.strokeStyle = '#f6fafd';
+      context.lineWidth = 9;
+      context.beginPath();
+      context.moveTo(-70, -87);
+      context.lineTo(-2, -139);
+      context.lineTo(70, -87);
+      context.stroke();
+      context.fillStyle = '#e8f3f8';
+      for (let i = -3; i <= 3; i += 1) {
+        const length = 5 + ((i * 73 + 19) % 5);
+        context.beginPath();
+        context.moveTo(i * 18 - 2.5, -85);
+        context.lineTo(i * 18 + 2.5, -85);
+        context.lineTo(i * 18, -85 + length);
+        context.closePath();
+        context.fill();
+      }
+      context.fillStyle = '#f2f8fc';
+      context.beginPath();
+      context.ellipse(0, 4, 80, 12, 0, 0, TAU);
+      context.fill();
+      context.beginPath();
+      context.ellipse(-36, 7, 34, 8, 0, 0, TAU);
+      context.fill();
+    }
+
+    // A small round attic window in the gable, lit from within.
+    const atticGlow = context.createRadialGradient(-2, -102, 2, -2, -102, 22);
+    atticGlow.addColorStop(0, `rgba(255, 214, 140, ${0.3 * warm * flicker})`);
+    atticGlow.addColorStop(1, 'rgba(255, 214, 140, 0)');
+    context.fillStyle = atticGlow;
+    context.fillRect(-24, -124, 44, 44);
+    context.fillStyle = `rgba(255, 216, 148, ${0.55 + 0.4 * warm})`;
+    context.beginPath();
+    context.arc(-2, -102, 6, 0, TAU);
+    context.fill();
+    context.strokeStyle = '#9b775b';
+    context.lineWidth = 2;
+    context.stroke();
+
+    // The cross-framed window with a warm, gently flickering glow.
+    const windowGlow = context.createRadialGradient(-27, -47, 4, -27, -47, 48);
+    windowGlow.addColorStop(0, `rgba(255, 214, 140, ${0.38 * warm * flicker})`);
+    windowGlow.addColorStop(1, 'rgba(255, 214, 140, 0)');
+    context.fillStyle = windowGlow;
+    context.fillRect(-72, -88, 90, 82);
     context.fillStyle = '#755b4d';
     context.fillRect(-43, -63, 32, 32);
-    context.fillStyle = '#ffdfa4';
+    context.fillStyle = `rgba(255, 223, 164, ${clamp(0.7 + 0.3 * warm, 0, 1)})`;
     context.fillRect(-40, -60, 26, 26);
     context.strokeStyle = '#9b775b';
     context.lineWidth = 2;
@@ -1789,11 +1911,50 @@ export class SnowGameEngine {
     context.fillStyle = '#e8edf0';
     context.fillRect(-45, -32, 36, 4);
 
-    // The open doorway is large enough for the rider and bicycle to enter.
+    // A lantern by the door for the darker trails.
+    if (theme === 'moonlit-forest' || theme === 'misty-mountains') {
+      context.fillStyle = '#4a3f35';
+      context.fillRect(58, -46, 3.5, 50);
+      context.fillRect(51, -46, 16, 3);
+      const lampX = 59;
+      const lampY = -53;
+      const lampHalo = context.createRadialGradient(lampX, lampY, 2, lampX, lampY, theme === 'misty-mountains' ? 62 : 42);
+      lampHalo.addColorStop(0, `rgba(255, 206, 130, ${0.45 * warm})`);
+      lampHalo.addColorStop(1, 'rgba(255, 206, 130, 0)');
+      context.fillStyle = lampHalo;
+      context.fillRect(lampX - 64, lampY - 64, 128, 128);
+      context.fillStyle = '#2f2a24';
+      context.fillRect(lampX - 4.5, lampY - 6, 9, 12);
+      context.fillStyle = `rgba(255, 214, 140, ${0.75 + 0.25 * Math.sin(this.clock * 3.7 + 1)})`;
+      context.fillRect(lampX - 2.5, lampY - 4, 5, 8);
+    }
+
+    // The doorway: frame, warm interior revealed as the door swings open.
     context.fillStyle = '#765a49';
     context.fillRect(3, -54, 42, 60);
-    context.fillStyle = '#352f32';
+    context.fillStyle = '#2b2320';
     context.fillRect(7, -50, 34, 56);
+    if (door > 0) {
+      const interior = context.createLinearGradient(7, 0, 41, 0);
+      interior.addColorStop(0, `rgba(255, 190, 110, ${0.55 * door * warm})`);
+      interior.addColorStop(1, `rgba(255, 214, 150, ${0.38 * door * warm})`);
+      context.fillStyle = interior;
+      context.fillRect(7, -50, 34, 56);
+    }
+    // Door panel, hinged on the left, swinging inward as it opens.
+    context.save();
+    context.translate(7, 0);
+    context.scale(Math.max(0.14, Math.cos(door * 1.25)), 1);
+    context.fillStyle = '#8a6a4f';
+    context.fillRect(0, -50, 34, 56);
+    context.fillStyle = '#7a5c43';
+    context.fillRect(3, -46, 28, 22);
+    context.fillRect(3, -20, 28, 22);
+    context.fillStyle = '#ffd98b';
+    context.beginPath();
+    context.arc(29, -22, 2.2, 0, TAU);
+    context.fill();
+    context.restore();
     context.fillStyle = '#f8d297';
     context.fillRect(8, -49, 3, 52);
     context.fillStyle = '#ffdda0';

@@ -160,6 +160,7 @@ export class LevelManager<T = never> {
 
   markSafeHouseReached(): boolean {
     if (!this.targetReached) return false;
+    if (this.safeHouseReached) return false; // idempotent: no duplicate completion
     this.safeHouseLevel = this.current.number;
     return true;
   }

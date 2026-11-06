@@ -1717,3 +1717,19 @@ kbd {
   border-color: #9fd3ff;
   color: #ffffff;
 }
+
+/* ── Phase 6 cinematic completion / continue hint ───────────────────── */
+.level-continue-hint {
+  display: block;
+  margin-top: 10px;
+  font-size: 9px;
+  letter-spacing: 0.3em;
+  color: #f2d2a6;
+  opacity: 0;
+  animation: continueHint 2s ease 1.1s forwards;
+}
+@keyframes continueHint { to { opacity: 0.85; } }
+@media (prefers-reduced-motion: reduce) {
+  .level-continue-hint { animation: none; opacity: 0.85; }
+}
+.dev-level-button.dev-finish { border-color: rgba(255, 217, 139, 0.55); color: #ffe9c2; }

@@ -591,6 +591,14 @@ export default function App() {
     engine.startLevelPreview(level);
   };
 
+  // Phase 6 dev tool: jump straight to the cinematic final approach.
+  const finishLevelForTest = () => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    audio.click();
+    engine.devFinishLevel();
+  };
+
   const togglePause = () => engineRef.current?.togglePause();
 
   const continueParkedRun = () => {
@@ -752,6 +760,9 @@ export default function App() {
               <em>{level}</em> {label}
             </button>
           ))}
+          <button type="button" className="dev-level-button dev-finish" onClick={finishLevelForTest}>
+            ⏭ Finish level
+          </button>
         </div>
       )}
 
@@ -845,6 +856,7 @@ export default function App() {
               <span className="level-completion-rule" />
               <p>50,000 POINTS · A JOURNEY WELL RIDDEN</p>
               <h2>LEVEL {hud.level.number} COMPLETED</h2>
+              <span className="level-continue-hint">TAP TO CONTINUE</span>
               <span className="level-completion-rule" />
             </div>
           )}
