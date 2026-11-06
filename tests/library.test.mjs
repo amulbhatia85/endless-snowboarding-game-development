@@ -285,6 +285,14 @@ test('Consecutive hazard corridors never overlap, including the new kinds', () =
   for (let index = 1; index < placed.length; index += 1) {
     const previous = placed[index - 1];
     const current = placed[index];
+    // A coupled ramp-gap is ONE shared trajectory: the ramp launches the
+    // rider over the gap that sits 135 px later, so the pair intentionally
+    // shares a single corridor (same validation, same clearUntil). Only
+    // independent hazard groups must clear each other's corridors.
+    const coupled = previous.plan.patternId === 'ramp-gap'
+      && current.plan.patternId === 'ramp-gap'
+      && current.x - previous.x < 200;
+    if (coupled) continue;
     const footprintStart = Math.min(current.x - 40, current.plan.takeoff.start);
     assert.ok(footprintStart >= previous.plan.clearUntil - 1,
       `${current.plan.obstacleId} at ${Math.round(current.x)} overlaps ${previous.plan.obstacleId} corridor`);

@@ -186,7 +186,10 @@ export class ObstaclePlanner {
     // Weighted selection tuned to the pacing target: patterns whose challenge
     // rating matches the directive's intensity dominate, recent patterns are
     // exponentially discounted, and everything stays seeded and deterministic.
+    // Phase 9C — the level's dominant obstacle families (obstacleFocus) get a
+    // weight boost; availability and validation are never reduced.
     const recent = directive ? (context.recentPatterns ?? []) : [];
+    const focus = context.level.obstacleFocus;
     const weights = candidates.map(pattern => {
       let weight = pattern.weight;
       if (directive) {
@@ -194,6 +197,9 @@ export class ObstaclePlanner {
         weight *= Math.max(0.12, Math.exp(-(delta * delta) / (2 * 0.22 * 0.22)));
         const repeats = recent.reduce((count, id) => count + (id === pattern.id ? 1 : 0), 0);
         weight *= 0.5 ** repeats;
+      }
+      if (focus && focus.length) {
+        weight *= pattern.requires.some(id => focus.includes(id)) ? 1.9 : 0.72;
       }
       return weight;
     });

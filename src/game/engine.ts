@@ -759,6 +759,36 @@ export class SnowGameEngine {
   }
 
   /**
+   * Phase 9C developer tool (`?dev=1`): a full deterministic recipe for the
+   * current level — or any level number — so any problematic generation can be
+   * reproduced exactly (same journey seed, same configuration).
+   */
+  devLevelReport(levelNumber?: number): string {
+    const level = levelNumber === undefined ? this.levels.current : this.levels.getLevel(levelNumber);
+    const lines: string[] = [];
+    lines.push(`LEVEL ${level.number} · ${level.name}`);
+    lines.push(`ENVIRONMENT ${level.environment} · PROFILE ${level.profile.id} (${level.profile.label})`);
+    lines.push(`SEED ${level.seed} · terrain variation ${level.terrain.variationSeed} · heightScale ${level.terrain.heightScale.toFixed(2)}`);
+    const bias = level.profile.terrain;
+    lines.push(`TERRAIN BIAS range×${bias.rangeScale.toFixed(2)} bump×${bias.bumpScale.toFixed(2)} recovery×${bias.recoveryScale.toFixed(2)} valley${bias.valleyBias >= 0 ? '+' : ''}${bias.valleyBias.toFixed(2)}`);
+    lines.push(`DIFFICULTY tier ${level.difficulty.tier} · progression ${level.difficulty.progression.toFixed(2)} · levelIntensity ${this.difficulty.levelIntensity(level.number).toFixed(2)} (capped)`);
+    lines.push(`WEATHER ${level.weather.kind} ${level.weather.intensity.toFixed(2)} @ speed ${level.weather.speed.toFixed(2)}`);
+    lines.push(`OBSTACLES ${level.allowedObstacles.join(', ')}`);
+    lines.push(`FOCUS ${level.obstacleFocus.length ? level.obstacleFocus.join(', ') : '— (classic level)'}`);
+    const availability = patternAvailability(level);
+    lines.push(`PATTERNS available ${availability.filter((pattern) => pattern.available).length}/${availability.length}`);
+    for (const pattern of availability.filter((pattern) => !pattern.available).slice(0, 6)) {
+      lines.push(`  · ${pattern.id}: ${pattern.reason}`);
+    }
+    const recent = this.run?.recentPatterns ?? [];
+    lines.push(`RECENT PATTERNS ${recent.length ? recent.join(' → ') : '— (not riding)'}`);
+    const chunk = this.run ? this.terrain?.describe(this.run.rider.x) : undefined;
+    lines.push(`TERRAIN NOW ${chunk ? `L${chunk.level} chunk ${chunk.index} · ${chunk.pattern}` : '—'}`);
+    lines.push(`TARGET ${level.targetScore} pts · transitions ${level.transitions.start.seconds}s / ${level.transitions.end.entrySeconds}s+${level.transitions.end.completionSeconds}s`);
+    return lines.join('\n');
+  }
+
+  /**
    * Phase 9B developer tool (`?dev=1`): pin the weather to a preset so any
    * condition can be previewed in every environment regardless of level
    * config. `null` (or 'auto') restores the configured weather.

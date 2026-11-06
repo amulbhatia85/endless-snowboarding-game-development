@@ -12,6 +12,7 @@
     "test:obstacles": "node tests/obstacles.test.mjs",
     "test:environment": "node tests/environment.test.mjs",
     "test:atmosphere": "node --test tests/atmosphere.test.mjs",
+    "test:infinite": "node --test tests/infinite.test.mjs",
     "test:difficulty": "node --test tests/difficulty.test.mjs",
     "test:audit": "node --test tests/audit.test.mjs",
     "test:transition": "node --test tests/transition.test.mjs",

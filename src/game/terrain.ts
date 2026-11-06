@@ -1,7 +1,7 @@
 import { BICYCLE_PHYSICS, flipProgress } from './riderPhysics';
 import { OBSTACLE_REGISTRY } from './obstacleRegistry';
 export { BICYCLE_PHYSICS } from './riderPhysics';
-import { createLevelRandom, type EnvironmentTheme, type LevelConfiguration } from './levelManager';
+import { createLevelRandom, type EnvironmentTheme, type LevelConfiguration, type TerrainBias } from './levelManager';
 
 export const TERRAIN_CHUNK_WIDTH = 640;
 export const TERRAIN_MAX_SLOPE = 0.34;
@@ -21,14 +21,20 @@ const PROFILES: Record<EnvironmentTheme, { range: number; bump: number; recovery
   'misty-mountains': { range: 33, bump: 28, recovery: 0.24 },
   'moonlit-forest': { range: 25, bump: 22, recovery: 0.28 },
 };
+/** Phase 9C — the neutral bias keeps levels 1–4 byte-identical to Phase 8. */
+const NEUTRAL_TERRAIN_BIAS: TerrainBias = { rangeScale: 1, bumpScale: 1, recoveryScale: 1, valleyBias: 0 };
 const clamp = (n: number, low: number, high: number) => Math.max(low, Math.min(high, n));
 const smooth = (t: number) => t * t * t * (t * (t * 6 - 15) + 10);
 
 export class TerrainGenerator {
   private readonly chunks = new Map<number, TerrainChunk>();
   generatedChunks = 0;
+  /** Phase 9C — per-level statistical bias (neutral for levels 1–4). */
+  private readonly bias: TerrainBias;
 
-  constructor(readonly configuration: LevelConfiguration) {}
+  constructor(readonly configuration: LevelConfiguration) {
+    this.bias = configuration.profile?.terrain ?? NEUTRAL_TERRAIN_BIAS;
+  }
 
   get cachedChunks(): number { return this.chunks.size; }
 
@@ -37,12 +43,13 @@ export class TerrainGenerator {
   }
 
   private recovery(index: number): boolean {
-    return index <= 0 || this.random(index, 0x43f12) < PROFILES[this.configuration.environment].recovery;
+    const base = PROFILES[this.configuration.environment].recovery * this.bias.recoveryScale;
+    return index <= 0 || this.random(index, 0x43f12) < clamp(base, 0.08, 0.42);
   }
 
   private anchor(index: number): number {
     if (index <= 1 || this.recovery(index) || this.recovery(index - 1)) return 0;
-    const range = PROFILES[this.configuration.environment].range * this.configuration.terrain.heightScale;
+    const range = PROFILES[this.configuration.environment].range * this.configuration.terrain.heightScale * this.bias.rangeScale;
     return (this.random(index, 0xabc37) * 2 - 1) * range;
   }
 
@@ -54,13 +61,17 @@ export class TerrainGenerator {
     const delta = endHeight - startHeight;
     const choice = this.random(index, 0x581b);
     const recovery = this.recovery(index);
+    // Phase 9C — the profile's valley bias shifts the valley/rolling/ramp split
+    // while every branch remains reachable.
+    const valleyCut = 0.38 + this.bias.valleyBias;
+    const rampCut = 0.84 - this.bias.valleyBias * 0.5;
     const pattern: TerrainPattern = recovery ? 'recovery'
       : delta > 16 ? 'downhill' : delta < -16 ? 'uphill'
-      : choice < 0.38 ? 'valley' : choice < 0.84 ? 'rolling-hill' : 'ramp';
+      : choice < valleyCut ? 'valley' : choice < rampCut ? 'rolling-hill' : 'ramp';
     // The quintic interpolation has max derivative 1.875; the bump is
     // conservatively bounded by 6. Their combined slope stays below the cap.
     const slopeBudget = Math.max(0, TERRAIN_MAX_SLOPE - Math.abs(delta) * 1.875 / TERRAIN_CHUNK_WIDTH);
-    const desired = PROFILES[this.configuration.environment].bump
+    const desired = PROFILES[this.configuration.environment].bump * this.bias.bumpScale
       * (0.65 + this.configuration.difficulty.progression * 0.35) * (0.65 + choice * 0.35);
     const amplitude = Math.min(desired, slopeBudget * TERRAIN_CHUNK_WIDTH / 6);
     const bump = recovery || pattern === 'uphill' || pattern === 'downhill' ? 0 : amplitude * (pattern === 'valley' ? 1 : -1);

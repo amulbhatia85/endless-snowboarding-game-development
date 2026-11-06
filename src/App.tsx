@@ -218,6 +218,8 @@ export default function App() {
   const [obstaclePreview, setObstaclePreview] = useState('');
   const [weatherPreview, setWeatherPreview] = useState('auto');
   const [dayPreview, setDayPreview] = useState('auto');
+  const [levelJump, setLevelJump] = useState('');
+  const [levelInfoOpen, setLevelInfoOpen] = useState(false);
   const [rewardedReady, setRewardedReady] = useState(false);
   const [adBusy, setAdBusy] = useState(false);
   const [adNotice, setAdNotice] = useState('');
@@ -714,6 +716,15 @@ export default function App() {
     engine.setDayPhasePreview(id === 'auto' ? null : Number(id));
   };
 
+  // Phase 9C dev tool: jump to any generated level number (in-memory preview —
+  // saved progression is untouched), reproducing its exact deterministic
+  // configuration.
+  const jumpToAnyLevel = () => {
+    const parsed = Number.parseInt(levelJump, 10);
+    if (!Number.isInteger(parsed) || parsed < 1) return;
+    jumpToLevel(parsed);
+  };
+
   const togglePause = () => engineRef.current?.togglePause();
 
   const continueParkedRun = () => {
@@ -930,7 +941,28 @@ export default function App() {
               <option key={id} value={id}>{label}</option>
             ))}
           </select>
+          <input
+            className="dev-level-button dev-level-number"
+            aria-label="Developer level number (deterministic preview of any generated level)"
+            placeholder="Level #"
+            inputMode="numeric"
+            value={levelJump}
+            onChange={(event) => setLevelJump(event.target.value.replace(/[^0-9]/g, ''))}
+            onKeyDown={(event) => { if (event.key === 'Enter') jumpToAnyLevel(); }}
+          />
+          <button type="button" className="dev-level-button" onClick={jumpToAnyLevel}>
+            ↪ Go
+          </button>
+          <button type="button" className="dev-level-button" onClick={() => setLevelInfoOpen((open) => !open)}>
+            ℹ Level
+          </button>
         </div>
+      )}
+
+      {DEV_MODE && levelInfoOpen && (
+        <pre className="dev-level-info" aria-label="Generated level recipe (deterministic reproduction data)">
+          {engineRef.current?.devLevelReport() ?? ''}
+        </pre>
       )}
 
       {!splashDone && (
