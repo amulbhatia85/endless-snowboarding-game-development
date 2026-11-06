@@ -138,6 +138,18 @@ function formatDate(value: string): string {
 
 const MILESTONES = [500, 1000, 2500, 5000, 10000, 20000];
 
+// Phase 5A audit tool: `?dev=1` reveals the developer level selector (levels
+// 1–4, in-memory only — saved progression is never touched) and the engine's
+// diagnostics overlay. Purely a testing aid; invisible in normal play.
+const DEV_MODE = typeof window !== 'undefined'
+  && new URLSearchParams(window.location.search).get('dev') === '1';
+const DEV_LEVELS: { level: number; label: string }[] = [
+  { level: 1, label: 'Green Hills' },
+  { level: 2, label: 'Snowy Mountains' },
+  { level: 3, label: 'Misty Mountains' },
+  { level: 4, label: 'Moonlit Forest' },
+];
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<SnowGameEngine | null>(null);
@@ -567,6 +579,18 @@ export default function App() {
     engineRef.current?.start();
   };
 
+  const jumpToLevel = (level: number) => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    audio.click();
+    setResult(null);
+    setCrashResult(null);
+    setShowSettings(false);
+    setMenuView('home');
+    setHasParkedRun(false);
+    engine.startLevelPreview(level);
+  };
+
   const togglePause = () => engineRef.current?.togglePause();
 
   const continueParkedRun = () => {
@@ -714,6 +738,22 @@ export default function App() {
     <main className={`game-app screen-${screen}${IS_ANDROID ? ' android-app' : ''}`}>
       <canvas ref={canvasRef} className="game-canvas" aria-label="Afterglow endless snowboarding game" />
       <div className="scene-vignette" aria-hidden="true" />
+
+      {DEV_MODE && (
+        <div className="dev-level-bar" aria-label="Developer level selector (does not affect saved progress)">
+          <span className="dev-level-tag">DEV</span>
+          {DEV_LEVELS.map(({ level, label }) => (
+            <button
+              key={level}
+              type="button"
+              className={`dev-level-button${hud.level?.number === level ? ' active' : ''}`}
+              onClick={() => jumpToLevel(level)}
+            >
+              <em>{level}</em> {label}
+            </button>
+          ))}
+        </div>
+      )}
 
       {!splashDone && (
         <section className="studio-splash" aria-label="Shadows Game Studio" onClick={() => setSplashDone(true)}>

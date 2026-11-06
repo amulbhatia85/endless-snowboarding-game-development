@@ -140,30 +140,51 @@ From 45 k (progress ≥ 0.9):
    objects are cleared at `beginLevelArrival`. The house animation itself is
    Phase 6 — nothing was added there.
 
-## Debug overlay (`?debugObstacles=1`)
+## Debug overlay (`?debugObstacles=1` or `?dev=1`)
 
-The existing developer overlay now leads with the pacing panel:
+The existing developer overlay now leads with the diagnostics panel:
 
 ```
-LVL 12 · SNOWY-MOUNTAINS
+LVL 12 · SNOWY-MOUNTAINS · Snowfall Adventure
 DIFF 0.55 (lvl 0.86 · zone 0.90 · wave 0.69 · terr 0.94)
 ZONE MODERATE (20k–30k pts)
 WAVE 2/3 · recovery in ~3.1k pts        (or: RECOVERY ACTIVE / SAFE APPROACH)
 PATTERN double-logs · rating 0.55 · spacing 182px
-TERRAIN complexity 0.18 · spacing min 143px · jump reach 277–691px
+NEXT gap @+412px (small-gap)
+WEATHER snow 0.55 · wind 0.30
+TERRAIN L12 chunk 38 · rolling-hill · complexity 0.18 · jump reach 277–691px
+OBSTACLES rock,log,gap,ramp,bridge (+ice,icicle,snowball pending) · patterns 10/12
 REJECT small-gap @12843: Takeoff slope too steep        (existing, up to 4)
 ```
 
 Per-obstacle collision boxes, takeoff/landing corridors and pattern/spacing
 labels render as before.
 
+**Developer mode (`?dev=1`)** additionally shows the level-selector bar
+(levels 1–4) in the app shell and sandboxes the entire session: the engine
+runs on in-memory storage from construction, so neither the selector nor any
+play from a dev URL can write to saved progression or unlock levels
+(`LevelManager.enterPreview` swaps to a throwaway store).
+
 ## Testing
 
 ```bash
 npm run test:difficulty    # 10 tests
+npm run test:audit         # 10 tests — Phase 5A wiring audit (execution-path proof)
 npm run test:levels && npm run test:terrain && npm run test:obstacles && npm run test:environment
 npx tsc --noEmit
 ```
+
+`tests/audit.test.mjs` asserts, through execution paths rather than the
+existence of classes: level→environment binding for levels 1–4; per-level
+palette/weather/decoration/terrain differences; that every scenery frame
+renders via `EnvironmentManager` (method interception on a live `draw()`);
+that the engine source contains no legacy scenery code and routes hazard
+placement through the planner; that every generated hazard carries valid
+planner metadata and respects the environment's allowed set; that difficulty
+measurably changes intensity, spacing and hazard density; that the developer
+level selector switches levels without touching saved progression; and that
+`?dev=1` sessions are fully sandboxed.
 
 `tests/difficulty.test.mjs` covers: the saturating level curve (monotonic,
 bounded, tier ordering, config validation, custom caps); zone mapping and the

@@ -1670,3 +1670,50 @@ kbd {
 @media (prefers-reduced-motion: reduce) {
   .level-completion, .level-introduction { animation: none; }
 }
+
+/* ── Phase 5A developer level selector (?dev=1) ─────────────────────── */
+.dev-level-bar {
+  position: fixed;
+  left: 12px;
+  bottom: 12px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: rgba(10, 16, 28, 0.78);
+  border: 1px solid rgba(150, 200, 255, 0.35);
+  font-family: system-ui, sans-serif;
+  user-select: none;
+}
+.dev-level-tag {
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  color: #8fd0ff;
+  padding-right: 2px;
+}
+.dev-level-button {
+  appearance: none;
+  border: 1px solid rgba(150, 200, 255, 0.4);
+  background: rgba(28, 42, 66, 0.9);
+  color: #d9edff;
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  padding: 5px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.dev-level-button em {
+  font-style: normal;
+  font-weight: 700;
+  color: #ffd98b;
+  margin-right: 3px;
+}
+.dev-level-button:hover { background: rgba(52, 76, 116, 0.95); }
+.dev-level-button.active {
+  background: rgba(70, 120, 190, 0.95);
+  border-color: #9fd3ff;
+  color: #ffffff;
+}

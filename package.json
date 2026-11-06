@@ -11,7 +11,8 @@
     "test:terrain": "node tests/terrain.test.mjs",
     "test:obstacles": "node tests/obstacles.test.mjs",
     "test:environment": "node tests/environment.test.mjs",
-    "test:difficulty": "node --test tests/difficulty.test.mjs"
+    "test:difficulty": "node --test tests/difficulty.test.mjs",
+    "test:audit": "node --test tests/audit.test.mjs"
   },
   "dependencies": {
     "@capacitor-community/admob": "^8.3.0",

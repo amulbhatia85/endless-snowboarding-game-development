@@ -1,5 +1,5 @@
-import { ObstaclePlanner, OBSTACLE_PATTERNS, patternRating, validPlacementMetadata, type PlacementMetadata, type PlacementRejection } from './obstaclePlanner';
-import { OBSTACLE_REGISTRY, swingingLogPose } from './obstacleRegistry';
+import { ObstaclePlanner, OBSTACLE_PATTERNS, patternAvailability, patternRating, validPlacementMetadata, type PlacementMetadata, type PlacementRejection } from './obstaclePlanner';
+import { OBSTACLE_REGISTRY, obstacleReady, swingingLogPose } from './obstacleRegistry';
 import { flipProgress } from './riderPhysics';
 import { BICYCLE_PHYSICS, TerrainWorld, type TerrainOrigin } from './terrain';
 import { EnvironmentManager, decorationOverlapsGameplay, type EnvironmentView, type Palette } from './environment';
@@ -333,6 +333,21 @@ export class SnowGameEngine {
     if (!enabled) this.obstacleRejections = [];
   }
 
+  /**
+   * Phase 5A audit tool (developer level selector, `?dev=1`): restart the run
+   * at an arbitrary level. The LevelManager swaps to in-memory storage, so
+   * saved progression is never overwritten and nothing is permanently
+   * unlocked. Environment, weather, terrain and decorations rebind through
+   * the normal start() path.
+   */
+  startLevelPreview(level: number): boolean {
+    if (!Number.isSafeInteger(level) || level < 1 || level > 9999) return false;
+    this.obstacleRejections = [];
+    this.levels.enterPreview(level);
+    this.start();
+    return true;
+  }
+
   private readonly handleResize = () => {
     const bounds = this.canvas.getBoundingClientRect();
     this.width = Math.max(320, bounds.width || window.innerWidth);
@@ -361,12 +376,17 @@ export class SnowGameEngine {
     this.context = context;
     this.callbacks = callbacks;
     const parameters = new URLSearchParams(window.location?.search ?? '');
-    this.obstacleDebug = parameters.get('debugObstacles') === '1';
+    // ?debugObstacles=1 keeps the obstacle overlay; ?dev=1 (the developer
+    // mode that also shows the level selector in the shell) enables it too.
+    this.obstacleDebug = parameters.get('debugObstacles') === '1' || parameters.get('dev') === '1';
     // Local preview hook: ?level=N starts straight at that level (progress is
-    // kept in memory only so real saves are never touched).
+    // kept in memory only so real saves are never touched). ?dev=1 sandboxes
+    // the entire developer session the same way — the level selector and any
+    // play from a dev URL can never write to saved progression.
     const previewLevel = Number(parameters.get('level'));
     const preview = Number.isSafeInteger(previewLevel) && previewLevel >= 1 && previewLevel <= 9999;
-    const previewStorage = preview
+    const sandbox = preview || parameters.get('dev') === '1';
+    const previewStorage = sandbox
       ? (() => {
         const values = new Map<string, string>();
         return { getItem: (key: string) => values.get(key) ?? null, setItem: (key: string, value: string) => { values.set(key, value); } };
@@ -1552,18 +1572,25 @@ export class SnowGameEngine {
     }
     context.fillStyle = '#ffb0b0';
     let row = 0;
+    const baseline = 16 + this.difficultyDebugRowCount * 13 + 10;
     for (const rejected of this.obstacleRejections.slice(-4)) {
-      context.fillText(`REJECT ${rejected.patternId} @${Math.round(rejected.x)}: ${rejected.reason}`, 12, 90 + row++ * 14);
+      context.fillText(`REJECT ${rejected.patternId} @${Math.round(rejected.x)}: ${rejected.reason}`, 12, baseline + row++ * 14);
     }
     context.restore();
   }
 
-  /** Phase 5 debug panel: level, difficulty, pacing zone, wave, pattern,
-   *  terrain complexity, spacing and the upcoming recovery zone. */
+  private difficultyDebugRowCount = 1;
+
+  /**
+   * Phase 5A diagnostics: level & environment, difficulty, pacing zone, wave,
+   * active pattern, next obstacle, active weather, current terrain chunk and
+   * the obstacle types eligible for generation in this level.
+   */
   private drawDifficultyDebug(context: CanvasRenderingContext2D, run: RunState): void {
     const directive = this.lastDirective;
+    const level = this.levels.current;
     const rows: string[] = [
-      `LVL ${run.levelIndex + 1} · ${directive ? directive.environment.toUpperCase() : this.levels.current.environment.toUpperCase()}`,
+      `LVL ${run.levelIndex + 1} · ${level.environment.toUpperCase()} · ${level.name}`,
     ];
     if (directive) {
       const wave = directive.wave;
@@ -1576,11 +1603,21 @@ export class SnowGameEngine {
         `ZONE ${directive.zone.label} (${(directive.zone.fromPoints / 1000).toFixed(0)}k–${(directive.zone.toPoints / 1000).toFixed(0)}k pts)`,
         `WAVE ${wave.index + 1}/${wave.count} · ${recovery}`,
         `PATTERN ${this.lastPlanInfo ? `${this.lastPlanInfo.patternId} · rating ${this.lastPlanInfo.rating.toFixed(2)} · spacing ${Math.round(this.lastPlanInfo.spacing)}px` : '—'}`,
-        `TERRAIN complexity ${directive.terrainComplexity.toFixed(2)} · spacing min ${Math.round(directive.minSpacing)}px · jump reach ${directive.riderEnvelope.minJumpDistance}–${directive.riderEnvelope.maxJumpDistance}px`,
       );
     } else {
       rows.push('DIFF — (no planning pass yet)');
     }
+    const upcoming = run.objects.find((object) => object.plan && object.x > run.rider.x);
+    rows.push(`NEXT ${upcoming ? `${upcoming.kind} @+${Math.round(upcoming.x - run.rider.x)}px (${upcoming.plan!.patternId})` : '—'}`);
+    const weather = this.environment.weatherEffects().map((effect) => `${effect.kind} ${effect.intensity.toFixed(2)}`).join(' · ');
+    rows.push(`WEATHER ${weather || 'clear'}`);
+    const chunk = this.terrain?.describe(run.rider.x);
+    rows.push(`TERRAIN ${chunk ? `L${chunk.level} chunk ${chunk.index} · ${chunk.pattern} · complexity ${directive ? directive.terrainComplexity.toFixed(2) : '—'}` : '—'} · jump reach ${directive ? `${directive.riderEnvelope.minJumpDistance}–${directive.riderEnvelope.maxJumpDistance}px` : '—'}`);
+    const active = level.allowedObstacles.filter((id) => obstacleReady(id));
+    const pending = level.allowedObstacles.filter((id) => !obstacleReady(id));
+    const availablePatterns = patternAvailability(level).filter((pattern) => pattern.available).length;
+    rows.push(`OBSTACLES ${active.join(',')}${pending.length ? ` (+${pending.join(',')} pending)` : ''} · patterns ${availablePatterns}/${OBSTACLE_PATTERNS.length}`);
+    this.difficultyDebugRowCount = rows.length;
     context.fillStyle = '#b8e6ff';
     rows.forEach((text, index) => context.fillText(text, 12, 16 + index * 13));
   }

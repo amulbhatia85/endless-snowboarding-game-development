@@ -79,6 +79,12 @@ export class TerrainGenerator {
     return chunk.startHeight + (chunk.endHeight - chunk.startHeight) * smooth(t) + chunk.bump * bump;
   }
 
+  /** Phase 5A diagnostics: the chunk index and pattern at a position. */
+  describe(x: number): { index: number; pattern: TerrainPattern } {
+    const index = Math.max(0, Math.floor(x / TERRAIN_CHUNK_WIDTH));
+    return { index, pattern: this.chunk(index).pattern };
+  }
+
   /**
    * Phase 5 difficulty input: 0..1 roughness of the terrain across a window.
    * Recovery chunks are near zero; working chunks blend slope and bump
@@ -143,6 +149,16 @@ export class TerrainWorld {
       if (fromX >= this.origins[index].x) { origin = this.origins[index]; break; }
     }
     return this.generator(origin).complexity(fromX - origin.x, toX - origin.x);
+  }
+
+  /** Phase 5A diagnostics: the terrain chunk and pattern under a position. */
+  describe(x: number): { level: number; index: number; pattern: TerrainPattern } | undefined {
+    let origin = this.origins[0];
+    for (let index = this.origins.length - 1; index >= 0; index -= 1) {
+      if (x >= this.origins[index].x) { origin = this.origins[index]; break; }
+    }
+    const chunk = this.generator(origin).describe(x - origin.x);
+    return { level: origin.level, index: chunk.index, pattern: chunk.pattern };
   }
 
   maintain(cameraX: number, width: number): void {

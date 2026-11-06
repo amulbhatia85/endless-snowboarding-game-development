@@ -102,7 +102,7 @@ export class LevelManager<T = never> {
   private progress: ProgressSave<T>;
   private safeHouseLevel: number | null = null;
   private configuration: LevelConfiguration;
-  private readonly storage: ProgressStorage | undefined;
+  private storage: ProgressStorage | undefined;
   private readonly validateCheckpoint: (value: unknown) => value is T;
   storageAvailable = true;
 
@@ -193,6 +193,34 @@ export class LevelManager<T = never> {
     this.progress.checkpoint = null;
     this.safeHouseLevel = null;
     this.persist();
+  }
+
+  /**
+   * Phase 5A audit tool (developer level selector, `?dev=1`): jump to an
+   * arbitrary level using the same journey seed, entirely in memory. All
+   * subsequent persistence goes to a throwaway store, so real saved
+   * progression — scores, unlocks, checkpoints — is never overwritten and no
+   * level is permanently unlocked.
+   */
+  enterPreview(level: number): LevelConfiguration {
+    if (!positiveInteger(level)) throw new RangeError('Preview level must be a positive safe integer.');
+    const values = new Map<string, string>();
+    this.storage = { getItem: (key) => values.get(key) ?? null, setItem: (key, value) => { values.set(key, value); } };
+    this.progress = {
+      version: 1,
+      journeySeed: this.progress.journeySeed,
+      currentLevel: level,
+      unlockedThrough: Math.max(this.progress.unlockedThrough, level),
+      completedThrough: level - 1,
+      levelScore: 0,
+      runScore: 0,
+      lifetimeScore: this.progress.lifetimeScore,
+      checkpoint: null,
+    };
+    this.safeHouseLevel = null;
+    this.configuration = generateLevel(level, this.progress.journeySeed);
+    this.persist();
+    return this.configuration;
   }
 
   private persist(): boolean {
