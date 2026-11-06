@@ -15,6 +15,7 @@
  * cross-fade without gaps, flicker or pops.
  */
 import { createLevelRandom, generateLevel, type EnvironmentTheme, type LevelConfiguration, type ObstacleCategory } from './levelManager';
+import type { EventEnvironmentBias } from './events';
 import { WeatherSystem, type WeatherEffectConfig, type WeatherKind } from './weather';
 
 // ───────────────────────── shared types ─────────────────────────
@@ -148,6 +149,12 @@ export interface EnvironmentUpdateInfo {
   phase?: number;
   /** Resolved night factor 0..1 for this frame (defaults to phase lookup). */
   night?: number;
+  /**
+   * Phase 9D — live special-event bias (weather, wind, mist, light warmth,
+   * ambient density, leaf tint), already scaled by the event envelope.
+   * Null when no event is running.
+   */
+  event?: EventEnvironmentBias | null;
 }
 
 export const PARALLAX_LAYER_COUNT = 4;
@@ -668,6 +675,8 @@ export class EnvironmentManager {
   private readonly resolvedGround: GroundStyle = { kind: 'grass', detail: 1, crest: '#ffffff', speckle: '#ffffff' };
   private resolvedGroundMist = 0;
   private resolvedLightShafts = 0;
+  /** Phase 9D — live event bias (null when no special event is running). */
+  private event: EventEnvironmentBias | null = null;
 
   constructor(options: { particleCap?: number } = {}) {
     this.weather = new WeatherSystem(options);
@@ -727,8 +736,13 @@ export class EnvironmentManager {
       }
       this.resolve();
     }
-    this.weather.configure(this.resolvedWeather);
-    this.windValue = this.computeWind(info.storm);
+    // Phase 9D — the active special event nudges weather, wind and ambience.
+    // Everything is numeric bias on the resolved configuration, so the change
+    // is gradual (the engine pre-scales it by the event envelope) and
+    // automatically fades back when the event ends.
+    this.event = info.event ?? null;
+    this.weather.configure(this.event ? this.eventWeather() : this.resolvedWeather);
+    this.windValue = clamp01(this.computeWind(info.storm) + (this.event?.wind ?? 0));
     this.weather.update({
       delta,
       width: info.width,
@@ -741,6 +755,18 @@ export class EnvironmentManager {
     this.updateAmbient(delta, info, night);
     this.from.field.maintain(info.cameraX, info.width);
     this.to?.field.maintain(info.cameraX, info.width);
+  }
+
+  /** Resolved weather with the event bias folded in (visibility kept sane). */
+  private eventWeather(): WeatherEffectConfig[] {
+    const bias = this.event!;
+    return this.resolvedWeather.map((effect) => {
+      let intensity = effect.intensity;
+      if (effect.kind === 'snow') intensity = clamp01(intensity + bias.snow);
+      else if (effect.kind === 'fog') intensity = Math.min(0.68, Math.max(0, intensity + bias.fog));
+      else if (effect.kind === 'wind') intensity = clamp01(intensity + bias.wind);
+      return { kind: effect.kind, intensity };
+    });
   }
 
   /** Cosmetic gust strength: configured wind shaped by smooth noise + storms. */
@@ -760,6 +786,9 @@ export class EnvironmentManager {
     let visible = style.count;
     if (style.nightOnly) visible *= smoothstep(clamp01((night - 0.42) / 0.34));
     else if (style.dayOnly) visible *= 1 - 0.8 * smoothstep(clamp01((night - 0.34) / 0.36));
+    // Phase 9D — a running event (forest wind, golden hour) thickens the
+    // ambient particle field within the same reused pool.
+    visible *= 1 + (info.event?.ambient ?? 0);
     const target = Math.min(Math.round(visible), AMBIENT_CAP);
     if (target <= 0) {
       this.ambientActive = 0;
@@ -941,6 +970,9 @@ export class EnvironmentManager {
   }
 
   weatherEffects(): WeatherEffectConfig[] {
+    // Phase 9D — report the live weather (event bias included) so the debug
+    // overlay and audits see what is actually falling.
+    if (this.event) return this.eventWeather().map((effect) => ({ ...effect }));
     return this.resolvedWeather.map((effect) => ({ ...effect }));
   }
 
@@ -960,19 +992,34 @@ export class EnvironmentManager {
 
   drawSky(context: CanvasRenderingContext2D, view: EnvironmentView, palette: Palette): void {
     const { width, height } = view;
+    // Phase 9D — golden hour warms the low sky toward amber. The runtime
+    // night guard keeps the day/night clock untouched: at night the bias is
+    // simply ignored (and the event itself never activates then).
+    const warm = (this.event?.warmLight ?? 0) * (1 - palette.night);
+    const horizon = warm > 0.01 ? mixColor(palette.horizon, '#ffb45e', warm * 0.5) : palette.horizon;
+    const glow = warm > 0.01 ? mixColor(palette.glow, '#ffd9a0', warm * 0.6) : palette.glow;
     const sky = context.createLinearGradient(0, 0, 0, height * 0.72);
     sky.addColorStop(0, palette.top);
-    sky.addColorStop(0.62, mixColor(palette.top, palette.horizon, 0.54));
-    sky.addColorStop(1, palette.horizon);
+    sky.addColorStop(0.62, mixColor(palette.top, horizon, 0.54));
+    sky.addColorStop(1, horizon);
     context.fillStyle = sky;
     context.fillRect(0, 0, width, height);
 
-    const haloStrength = 0.2 * (0.4 + this.resolvedLight.sun * 0.6 + this.resolvedLight.moon * 0.5);
+    const haloStrength = 0.2 * (0.4 + this.resolvedLight.sun * 0.6 + this.resolvedLight.moon * 0.5) + warm * 0.1;
     const halo = context.createRadialGradient(width * 0.72, height * 0.34, 0, width * 0.72, height * 0.34, height * 0.58);
-    halo.addColorStop(0, alphaColor(palette.glow, haloStrength));
-    halo.addColorStop(1, alphaColor(palette.glow, 0));
+    halo.addColorStop(0, alphaColor(glow, haloStrength));
+    halo.addColorStop(1, alphaColor(glow, 0));
     context.fillStyle = halo;
     context.fillRect(0, 0, width, height * 0.8);
+
+    if (warm > 0.01) {
+      // A soft amber wash riding just above the horizon line.
+      const wash = context.createLinearGradient(0, height * 0.3, 0, height * 0.72);
+      wash.addColorStop(0, alphaColor('#ff9e4f', 0));
+      wash.addColorStop(1, alphaColor('#ff9e4f', warm * 0.1));
+      context.fillStyle = wash;
+      context.fillRect(0, height * 0.3, width, height * 0.42);
+    }
 
     const phase = view.phase;
     const sunOpacity = (1 - palette.night) * this.resolvedLight.sun;
@@ -1126,7 +1173,7 @@ export class EnvironmentManager {
       if (veil > 0.02) this.drawFogBand(context, view, index, veil);
     }
     this.drawClouds(context, view, palette);
-    if (this.resolvedLightShafts > 0.02 && !view.lighter) this.drawLightShafts(context, view, palette);
+    if (Math.min(1, this.resolvedLightShafts + (this.event?.shafts ?? 0)) > 0.02 && !view.lighter) this.drawLightShafts(context, view, palette);
     if (this.weather.fog > 0.03) this.drawHorizonHaze(context, view);
   }
 
@@ -1137,7 +1184,8 @@ export class EnvironmentManager {
    */
   private drawLightShafts(context: CanvasRenderingContext2D, view: EnvironmentView, palette: Palette): void {
     const lit = Math.max((1 - palette.night) * this.resolvedLight.sun, palette.night * this.resolvedLight.moon * 0.6);
-    const strength = this.resolvedLightShafts * lit;
+    // Phase 9D — golden hour / forest wind add extra shafts through the haze.
+    const strength = Math.min(1, this.resolvedLightShafts + (this.event?.shafts ?? 0)) * lit;
     if (strength <= 0.02) return;
     const { width, height, clock } = view;
     context.save();
@@ -1753,10 +1801,14 @@ export class EnvironmentManager {
   drawAmbient(context: CanvasRenderingContext2D, view: EnvironmentView): void {
     if (this.ambientActive <= 0) return;
     const style = this.resolvedAmbient;
+    // Phase 9D — forest wind recolours the ambient particles toward drifting
+    // autumn leaves while the event runs.
+    const leafTint = this.event?.leafTint ?? 0;
+    const ambientColor = leafTint > 0.01 ? mixColor(this.resolvedColors.ambient, '#d8a24a', Math.min(1, leafTint) * 0.75) : this.resolvedColors.ambient;
     context.save();
-    context.fillStyle = this.resolvedColors.ambient;
+    context.fillStyle = ambientColor;
     if (style.glow > 0 && !view.lighter) {
-      context.shadowColor = this.resolvedColors.ambient;
+      context.shadowColor = ambientColor;
       context.shadowBlur = style.glow;
     }
     for (let index = 0; index < this.ambientActive; index += 1) {
@@ -1776,7 +1828,10 @@ export class EnvironmentManager {
   drawWeather(context: CanvasRenderingContext2D, view: EnvironmentView, palette: Palette): void {
     this.weather.drawSnow(context, palette.night);
     this.weather.drawRain(context, this.windValue);
-    if (this.resolvedGroundMist > 0.03 && typeof view.groundAt === 'function') this.drawGroundMist(context, view, palette);
+    // Phase 9D — a mist surge thickens the ground band (cap 0.9 so wheels and
+    // nearby obstacles always stay readable).
+    const groundMist = Math.min(0.9, this.resolvedGroundMist + (this.event?.groundMist ?? 0));
+    if (groundMist > 0.03 && typeof view.groundAt === 'function') this.drawGroundMist(context, view, palette, groundMist);
     if (this.weather.fog > 0.02) {
       // A faint, uniform haze. It is deliberately subtle so nearby obstacles
       // stay clearly readable — heavy veiling happens behind the terrain only.
@@ -1790,9 +1845,9 @@ export class EnvironmentManager {
    * following the surface plus two slow drifting pockets. Slightly thinner
    * at night so wheels and obstacles remain readable.
    */
-  private drawGroundMist(context: CanvasRenderingContext2D, view: EnvironmentView, palette: Palette): void {
+  private drawGroundMist(context: CanvasRenderingContext2D, view: EnvironmentView, palette: Palette, strengthOverride: number): void {
     const { width, height, clock, cameraX } = view;
-    const strength = this.resolvedGroundMist * (1 - palette.night * 0.22);
+    const strength = strengthOverride * (1 - palette.night * 0.22);
     const color = mixColor(this.resolvedColors.fog, palette.horizon, 0.35);
     const step = 64;
     const samples = Math.ceil(width / step) + 2;

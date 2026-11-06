@@ -117,10 +117,16 @@ export interface PlanningContext {
   reserved: readonly Region[];
   nearby: readonly { kind: string; x: number; width?: number; plan?: PlacementMetadata }[];
   /** Phase 5 pacing directive. Absent → legacy behaviour (fixed reaction
-   *  budget, flat weights, 17 % recovery) so existing callers are unchanged. */
+   * budget, flat weights, 17 % recovery) so existing callers are unchanged. */
   directive?: DifficultyDirective;
   /** Recently scheduled pattern ids, oldest first — drives repetition control. */
   recentPatterns?: readonly string[];
+  /**
+   * Phase 9D — special-event pattern preference. Ids listed here get a weight
+   * boost while the event window runs; availability, validation and spacing
+   * are never relaxed, so hinted patterns stay as safe as any other.
+   */
+  hint?: { readonly prefer: readonly string[] };
 }
 
 export function patternAvailability(level: LevelConfiguration): { id: string; category: ObstacleGroup; available: boolean; reason?: string }[] {
@@ -201,16 +207,56 @@ export class ObstaclePlanner {
       if (focus && focus.length) {
         weight *= pattern.requires.some(id => focus.includes(id)) ? 1.9 : 0.72;
       }
+      // Phase 9D — event preference (mountain crossing → bridges, rare
+      // challenge → big lines, falling hazards → timed drops). Pure weight
+      // bias: the full validation pipeline still applies.
+      if (context.hint && context.hint.prefer.length) {
+        weight *= context.hint.prefer.includes(pattern.id) ? 6 : 0.55;
+      }
       return weight;
     });
     for (let attempt = 0; attempt < 3 && candidates.length; attempt++) {
-      const total = weights.reduce((sum, weight) => sum + weight, 0);
-      let pick = random() * total;
-      let index = 0;
-      while (index < weights.length - 1 && pick >= weights[index]) pick -= weights[index++];
+      // Phase 9D — the first attempt of a hinted plan draws from the event's
+      // preferred patterns (weighted, so crossings still vary between rope
+      // bridges, broken bridges and platforms). Later attempts fall back to
+      // the full weighted pool. Availability and validation are unchanged.
+      const pool = attempt === 0 && context.hint?.prefer.length
+        ? candidates.map((pattern, position) => ({ pattern, position }))
+          .filter((entry) => context.hint!.prefer.includes(entry.pattern.id))
+        : null;
+      let index: number;
+      if (pool && pool.length) {
+        const total = pool.reduce((sum, entry) => sum + weights[entry.position], 0);
+        let pick = random() * total;
+        let chosen = pool[pool.length - 1];
+        for (const entry of pool) {
+          if (pick < weights[entry.position]) {
+            chosen = entry;
+            break;
+          }
+          pick -= weights[entry.position];
+        }
+        index = chosen.position;
+      } else {
+        const total = weights.reduce((sum, weight) => sum + weight, 0);
+        let pick = random() * total;
+        index = 0;
+        while (index < weights.length - 1 && pick >= weights[index]) pick -= weights[index++];
+      }
       const pattern = candidates.splice(index, 1)[0];
       weights.splice(index, 1);
-      const plan = this.build(pattern, context, options, reactionDistance, random);
+      let plan = this.build(pattern, context, options, reactionDistance, random);
+      // Phase 9D — event-preferred patterns earn positional retries so a
+      // themed window delivers its flavour even where the terrain at the
+      // candidate spot is hostile. The shifts span more than a terrain chunk
+      // (640 px) so at least one retry lands in a different slope zone. Same
+      // validation, shifted spot.
+      if (typeof plan === 'string' && context.hint?.prefer.includes(pattern.id)) {
+        for (const shift of [200, 420, 700, 1000]) {
+          plan = this.build(pattern, { ...context, candidateX: context.candidateX + shift }, options, reactionDistance, random);
+          if (typeof plan !== 'string') break;
+        }
+      }
       if (typeof plan === 'string') {
         rejected.push({ x: context.candidateX, patternId: pattern.id, reason: plan });
         continue;
@@ -228,9 +274,18 @@ export class ObstaclePlanner {
         && patternIsDangerous(previous) && patternIsDangerous(pattern.id)
         ? directive.dangerRecovery * 0.6
         : 0;
+      // Phase 9D — while an event prefers certain patterns, a non-preferred
+      // plan schedules its successor sooner so the event gets another shot
+      // inside its window. Safety is unaffected: every placement still runs
+      // the full validation pipeline and honours the reaction distance.
+      const hinted = context.hint && context.hint.prefer.length > 0;
+      const offHint = hinted && !context.hint!.prefer.includes(pattern.id);
+      const nextX = plan.clearUntil + reactionDistance + spacingBase + extraRecovery + dangerPad + stackingPad + random() * 180;
       return {
         patternId: pattern.id, obstacles: plan.obstacles, clearUntil: plan.clearUntil,
-        nextX: plan.clearUntil + reactionDistance + spacingBase + extraRecovery + dangerPad + stackingPad + random() * 180,
+        nextX: offHint
+          ? Math.max(plan.clearUntil + reactionDistance + 240 + random() * 200, context.candidateX + 620)
+          : nextX,
         rejected,
       };
     }

@@ -439,10 +439,16 @@ export class AudioManager {
     const theme = s.theme ?? 'countryside';
     const windTone = theme === 'snowy-mountains' ? 1.35 : theme === 'misty-mountains' ? 0.72 : 1;
     const themeWind = theme === 'misty-mountains' ? -0.012 : theme === 'snowy-mountains' ? 0.014 : 0;
+    // Phase 9D — special events shape the ambience gradually: storms and
+    // forest gusts push the wind up, calm journeys and mist pull it back.
+    const event = s.event ?? null;
+    const eventWindGain = event
+      ? (event.id === 'snowstorm' || event.id === 'forest-wind' ? 0.3 : event.id === 'calm-journey' || event.id === 'mist-surge' ? -0.25 : 0) * event.intensity
+      : 0;
     const windLevel = playing
       ? 0.035 + s.speed * 0.07 + (airborne ? 0.07 : 0) + Math.max(0, s.slope) * 0.09 + s.storm * 0.08 + themeWind
       : 0.04 + s.storm * 0.06 + themeWind;
-    this.wind.gain.gain.setTargetAtTime(windLevel, now, 0.35);
+    this.wind.gain.gain.setTargetAtTime(Math.max(0.008, windLevel * (1 + eventWindGain * 2)), now, 0.35);
     this.wind.filter.frequency.setTargetAtTime((320 + s.speed * 520 + (airborne ? 500 : 0) + s.storm * 300) * windTone, now, 0.4);
 
     this.storm.gain.gain.setTargetAtTime(s.storm * 0.13, now, 0.8);
@@ -458,7 +464,9 @@ export class AudioManager {
     if (s.spinning && !this.spinWhoosh) this.startSpinWhoosh();
     else if (!s.spinning && this.spinWhoosh) this.stopSpinWhoosh();
 
-    this.musicTone.frequency.setTargetAtTime(lerp(4200, 1900, s.night) * (s.status === 'paused' ? 0.35 : 1), now, 0.6);
+    this.musicTone.frequency.setTargetAtTime(lerp(4200, 1900, s.night) * (s.status === 'paused' ? 0.35 : 1)
+      // Phase 9D — golden hour warms the ambient tone, calm journeys soften it.
+      * (event ? (event.id === 'golden-hour' ? 1 + 0.07 * event.intensity : event.id === 'calm-journey' ? 1 - 0.05 * event.intensity : 1) : 1), now, 0.6);
   }
 
   private startSpinWhoosh(): void {

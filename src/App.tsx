@@ -3,6 +3,7 @@ import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import { Haptics, ImpactStyle, NotificationType } from '@capacitor/haptics';
 import { SnowGameEngine, type GameScreen, type GraphicsQuality, type HudSnapshot, type RunResult, type SoundEvent } from './game/engine';
+import { EVENT_DEFINITIONS, type EventId } from './game/events';
 import { AudioManager, type AudioSettings } from './game/audio';
 import { AdService } from './game/ads';
 import {
@@ -172,6 +173,12 @@ const DEV_PHASES: { id: string; label: string }[] = [
   { id: '0.66', label: 'Sunset' },
   { id: '0.9', label: 'Night' },
 ];
+// Phase 9D audit tool: force/inspect special events (in-memory only).
+const DEV_EVENTS: { id: string; label: string }[] = [
+  { id: 'auto', label: 'Event…' },
+  { id: 'none', label: 'No events' },
+  ...EVENT_DEFINITIONS.map((definition) => ({ id: definition.id, label: definition.label })),
+];
 // Phase 9A audit tool: per-obstacle preview ids (validated placements only).
 const DEV_OBSTACLES: { id: string; label: string }[] = [
   { id: 'rock', label: 'Rock' },
@@ -218,6 +225,7 @@ export default function App() {
   const [obstaclePreview, setObstaclePreview] = useState('');
   const [weatherPreview, setWeatherPreview] = useState('auto');
   const [dayPreview, setDayPreview] = useState('auto');
+  const [eventPreview, setEventPreview] = useState('auto');
   const [levelJump, setLevelJump] = useState('');
   const [levelInfoOpen, setLevelInfoOpen] = useState(false);
   const [rewardedReady, setRewardedReady] = useState(false);
@@ -716,6 +724,17 @@ export default function App() {
     engine.setDayPhasePreview(id === 'auto' ? null : Number(id));
   };
 
+  // Phase 9D dev tool: force the next special event, suspend all events, or
+  // restore the deterministic schedule. In-memory only — generation seed,
+  // saved progression and rewards are untouched.
+  const previewEvent = (id: string) => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    audio.click();
+    setEventPreview(id);
+    engine.setEventPreview(id as 'auto' | 'none' | EventId);
+  };
+
   // Phase 9C dev tool: jump to any generated level number (in-memory preview —
   // saved progression is untouched), reproducing its exact deterministic
   // configuration.
@@ -938,6 +957,16 @@ export default function App() {
             onChange={(event) => previewDayPhase(event.target.value)}
           >
             {DEV_PHASES.map(({ id, label }) => (
+              <option key={id} value={id}>{label}</option>
+            ))}
+          </select>
+          <select
+            className="dev-level-button dev-obstacle-select"
+            aria-label="Developer special-event preview (forces the next event window)"
+            value={eventPreview}
+            onChange={(event) => previewEvent(event.target.value)}
+          >
+            {DEV_EVENTS.map(({ id, label }) => (
               <option key={id} value={id}>{label}</option>
             ))}
           </select>

@@ -18,7 +18,8 @@
     "test:transition": "node --test tests/transition.test.mjs",
     "test:rewards": "node --test tests/rewards.test.mjs",
     "test:recovery": "node --test tests/recovery.test.mjs",
-    "test:library": "node --test tests/library.test.mjs"
+    "test:library": "node --test tests/library.test.mjs",
+    "test:events": "node --test tests/events.test.mjs"
   },
   "dependencies": {
     "@capacitor-community/admob": "^8.3.0",

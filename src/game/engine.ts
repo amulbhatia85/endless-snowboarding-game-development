@@ -7,6 +7,7 @@ import type { EnvironmentTheme } from './levelManager';
 import type { WeatherEffectConfig } from './weather';
 import { createLevelRandom, LevelManager, previewLevelForObstacle } from './levelManager';
 import { DifficultyManager, type DifficultyDirective } from './difficulty';
+import { EventManager, EVENT_DEFINITIONS, eventDefinition, scheduleForLevel, type EventId } from './events';
 
 import { BIKES, RIDERS, TRAILS, MISSIONS, MISSION_BONUS, isUnlocked, requirementsMet, findCosmetic, type BikeEntry, type RiderEntry, type TrailEntry, type UnlockContext } from './progression';
 import { Wallet, REWARD_CONFIG, type LevelRewardBreakdown } from './wallet';
@@ -77,6 +78,8 @@ export interface AudioFrameState {
   theme: EnvironmentTheme;
   /** Phase 9B — cosmetic wind strength 0..1 for ambience shaping. */
   wind: number;
+  /** Phase 9D — running special event (id + envelope) for ambience shaping. */
+  event?: { id: string; intensity: number } | null;
 }
 
 export const POWERS = {
@@ -373,6 +376,10 @@ export class SnowGameEngine {
   private readonly difficulty = new DifficultyManager();
   private lastDirective?: DifficultyDirective;
   private lastPlanInfo: { patternId: string; rating: number; spacing: number } | null = null;
+  // Phase 9D — deterministic special events. One manager for the whole
+  // session; it rebinds (idempotently) whenever the level or its start x
+  // changes, so restored checkpoints and revivals replay the same schedule.
+  private readonly events = new EventManager();
   /** Fixed terrain-complexity sampling window: generation must not depend on
    *  the viewport, or wide and narrow screens would diverge (see tests). */
   private static readonly COMPLEXITY_WINDOW = 2000;
@@ -782,6 +789,26 @@ export class SnowGameEngine {
     }
     const recent = this.run?.recentPatterns ?? [];
     lines.push(`RECENT PATTERNS ${recent.length ? recent.join(' → ') : '— (not riding)'}`);
+    // Phase 9D — special-event schedule for this level (deterministic from
+    // the level seed + start x; dev previews never touch saved progress).
+    const isCurrentLevel = this.run && this.levels.current.number === level.number;
+    const eventReport = this.events.report();
+    const windows = isCurrentLevel
+      ? eventReport.windows
+      : scheduleForLevel(level, 0).map((window, index) => ({ ...window, index }));
+    const riderX = this.run?.rider.x ?? 0;
+    const offsetNote = isCurrentLevel ? '' : ' (relative to level start)';
+    lines.push(`EVENTS ${eventReport.suppressed && isCurrentLevel ? 'suppressed (dev)' : `${windows.length} scheduled`}${eventReport.forced && isCurrentLevel ? ` · forcing ${eventReport.forced}` : ''}${eventReport.active && isCurrentLevel ? ` · ACTIVE ${eventReport.active.eventId} ${(eventReport.active.intensity * 100).toFixed(0)}% (${Math.round(eventReport.active.remainingPx)}px left)` : ''}${offsetNote}`);
+    for (const window of windows) {
+      const state = isCurrentLevel && eventReport.active?.eventId === window.eventId && window.endX > riderX && window.startX - 60 <= riderX ? 'ACTIVE'
+        : window.startX > riderX || !isCurrentLevel ? 'upcoming' : 'passed';
+      lines.push(`  · ${window.index + 1}. ${window.eventId} @ ${Math.round(window.startX)}–${Math.round(window.endX)} (${state}, ${Math.round(window.endX - window.startX)}px)`);
+    }
+    const eligibleEvents = EVENT_DEFINITIONS
+      .filter((definition) => definition.environments === '*' || definition.environments.includes(level.environment))
+      .filter((definition) => level.number >= definition.minLevel)
+      .map((definition) => `${definition.id}(r${definition.rarity})`);
+    lines.push(`EVENT POOL ${eligibleEvents.join(' · ')}`);
     const chunk = this.run ? this.terrain?.describe(this.run.rider.x) : undefined;
     lines.push(`TERRAIN NOW ${chunk ? `L${chunk.level} chunk ${chunk.index} · ${chunk.pattern}` : '—'}`);
     lines.push(`TARGET ${level.targetScore} pts · transitions ${level.transitions.start.seconds}s / ${level.transitions.end.entrySeconds}s+${level.transitions.end.completionSeconds}s`);
@@ -803,6 +830,21 @@ export class SnowGameEngine {
       storm: [{ kind: 'snow', intensity: 0.9 }, { kind: 'wind', intensity: 0.85 }, { kind: 'fog', intensity: 0.3 }],
     };
     this.environment.setWeatherPreview(preset && preset !== 'auto' ? presets[preset] : null);
+  }
+
+  /**
+   * Phase 9D developer tool (`?dev=1`): preview any special event. 'none'
+   * suspends every event, an event id forces the next upcoming window to it
+   * (appending one if the schedule is exhausted), and 'auto' restores the
+   * deterministic schedule. In-memory only — saved progress is untouched.
+   */
+  setEventPreview(mode: 'auto' | 'none' | EventId): void {
+    if (mode === 'auto' || mode === 'none') {
+      this.events.setPreview(mode);
+      return;
+    }
+    const riderX = this.run?.rider.x ?? 0;
+    this.events.forceNext(mode, riderX);
   }
 
   /**
@@ -892,6 +934,9 @@ export class SnowGameEngine {
     run.crashReaction = undefined;
     run.invulnerableUntil = run.elapsed + RECOVERY_CONFIG.reviveInvulnerabilitySeconds;
     run.crashReason = '';
+    // Phase 9D — hold new event activations for a grace distance after
+    // revival so the rider always re-enters a calm, readable stretch.
+    this.events.reviveFrom(safeX);
     // Phase 8 — restore camera tracking smoothly: apply part of the
     // correction now and let the regular smoothed follow finish the ease.
     const cameraTarget = rider.x - this.width * this.riderScreenPosition(run);
@@ -939,6 +984,23 @@ export class SnowGameEngine {
     // palettes, ambience and music never drift apart.
     const phase = this.currentDayPhase();
     this.lastNight = this.environment.palette(phase).night;
+    // Phase 9D — advance the special-event state before the environment
+    // update so the weather/ambience bias is fresh. Events only run while the
+    // rider is actually riding the level (never during house transitions or
+    // the final safe approach) and pause for a grace distance after revival.
+    const runNow = this.run;
+    if (runNow) {
+      this.events.bind(this.levels.current, runNow.levelStartX, runNow.rider.x);
+      this.events.update(runNow.rider.x, {
+        riding: runNow.levelPhase === 'riding',
+        safeApproach: !!this.lastDirective?.safeApproach,
+        reviveGraceX: 0,
+        phase,
+        night: this.lastNight,
+      });
+    } else {
+      this.events.update(0, { riding: false, safeApproach: false, reviveGraceX: 0, phase, night: this.lastNight });
+    }
     // Environment and weather advance every frame (all statuses) so the menu
     // stays alive and level cross-fades run even while the world is parked.
     this.environment.update(delta, {
@@ -951,6 +1013,7 @@ export class SnowGameEngine {
       groundAt: this.environmentView.groundAt,
       phase,
       night: this.lastNight,
+      event: this.events.bias(),
     });
     this.lastEnvironmentCameraX = terrainCamera;
     this.draw();
@@ -967,6 +1030,7 @@ export class SnowGameEngine {
         storm: this.stormLevel(),
         theme: this.environment.theme,
         wind: this.environment.windStrength,
+        event: this.events.current ? { id: this.events.current.eventId, intensity: this.events.current.intensity } : null,
       });
     }
     this.frameHandle = window.requestAnimationFrame(this.frame);
@@ -1092,8 +1156,15 @@ export class SnowGameEngine {
 
     while (run.nextCoinX < ahead) {
       const start = run.nextCoinX;
+      // Phase 9D — a glowstone trail event densifies the coin pipeline while
+      // its window runs: longer arcs, higher (still easily jumpable) curves
+      // and tighter spacing. The placement rules are unchanged — coins still
+      // hug the terrain, skip blocked spots and ride the persisted
+      // nextCoinX cursor, so checkpoints and rewards behave exactly like the
+      // regular arcs.
+      const trail = this.events.coinTrailAt(start);
       const random = createLevelRandom(this.levels.current.seed ^ Math.floor(start) ^ 0x51c01);
-      const count = 3 + Math.floor(random() * 3);
+      const count = 3 + Math.floor(random() * 3) + (trail > 0.4 ? 4 : 0);
       for (let index = 0; index < count; index += 1) {
         const curve = count < 2 ? 0 : Math.sin((index / (count - 1)) * Math.PI);
         const coinX = start + index * 38;
@@ -1104,12 +1175,12 @@ export class SnowGameEngine {
           run.objects.push({
             kind: 'coin',
             x: coinX,
-            offset: 38 + curve * 24,
+            offset: 38 + curve * (24 + 44 * trail),
             phase: random() * TAU,
           });
         }
       }
-      run.nextCoinX += 310 + random() * 260;
+      run.nextCoinX += trail > 0.4 ? 230 + random() * 90 : 310 + random() * 260;
     }
 
     while (run.nextHazardX < ahead) {
@@ -1129,6 +1200,24 @@ export class SnowGameEngine {
       const previewLevel = this.obstaclePreview && obstacleReady(this.obstaclePreview)
         ? { ...this.levels.current, number: 99, allowedObstacles: [this.obstaclePreview as ObstacleId] }
         : this.levels.current;
+      // Phase 9D — per-position event folding: the directive is reweighting
+      // only (calm journeys → recovery, crossings/challenges → focus and
+      // heat) and hinted patterns get a weight boost inside the planner. The
+      // planner's validation, conflicts and spacing are never relaxed.
+      const eventGameplay = this.events.gameplayAt(run.nextHazardX);
+      const planningDirective = eventGameplay.eventId
+        ? {
+          ...directive,
+          recoveryChance: clamp(
+            lerp(lerp(directive.recoveryChance, 1, eventGameplay.calm), 0.12, eventGameplay.hazardFocus), 0, 1),
+          patternIntensity: clamp(directive.patternIntensity + 0.22 * eventGameplay.dangerBias, 0, 1),
+          dangerRecovery: lerp(directive.dangerRecovery, directive.dangerRecovery + 320, eventGameplay.recoveryBoost),
+        }
+        : directive;
+      // Phase 9D — a mountain crossing leans into its theme: bridges may come
+      // 1800 px apart inside the window (the normal cooldown is 4500 px).
+      // Every bridge still runs the full deck-slope and traversal validation.
+      const crossing = eventGameplay.eventId === 'mountain-crossing' && eventGameplay.intensity > 0.5;
       const plan = this.obstaclePlanner.plan({
         level: previewLevel,
         candidateX: run.nextHazardX,
@@ -1137,15 +1226,16 @@ export class SnowGameEngine {
         riderAcceleration: Math.tan(run.rider.rotation) * 230 + 8 + difficulty * 9,
         surface: (x) => this.terrainAt(x),
         clearUntil: run.hazardClearUntil ?? 640,
-        bridgeAllowedAfter: run.nextBridgeX,
+        bridgeAllowedAfter: crossing ? run.nextBridgeX - 2700 : run.nextBridgeX,
         rampAllowedAfter: run.levelIndex === 0 ? 30_000 : run.levelStartX + 4000,
         reserved: [
           { start: run.levelStartX - 120, end: run.levelStartX + 640 },
           ...run.houses.map(house => ({ start: house.x - 300, end: house.x + 300 })),
         ],
         nearby: run.objects.filter(object => ['rock', 'log', 'tree', 'gap', 'ramp', 'swinging-log', 'root', 'fence', 'ice', 'icicle', 'snowball', 'branch'].includes(object.kind)),
-        directive,
+        directive: planningDirective,
         recentPatterns: run.recentPatterns,
+        hint: eventGameplay.prefer.length ? { prefer: eventGameplay.prefer } : undefined,
       });
       run.objects.push(...plan.obstacles);
       // Phase 7 — coins that now sit inside a newly placed hazard's collision
@@ -1963,6 +2053,31 @@ export class SnowGameEngine {
     // Screen-space weather stays outside the camera shake.
     this.environment.drawWeather(context, view, palette);
     if (run && !isMenu && this.status === 'playing' && run.levelPhase === 'riding') this.drawObstacleWarning(context, run);
+    if (!isMenu) this.drawEventBanner(context);
+  }
+
+  /**
+   * Phase 9D — a single soft banner announcing the running special event.
+   * It fades in and out with the event envelope and never blocks gameplay
+   * or other HUD elements (no popups, no dismiss action).
+   */
+  private drawEventBanner(context: CanvasRenderingContext2D): void {
+    const active = this.events.current;
+    if (!active || active.intensity < 0.12) return;
+    const definition = eventDefinition(active.eventId);
+    const alpha = Math.min(1, active.intensity * 1.6) * 0.85;
+    context.save();
+    context.textAlign = 'center';
+    context.font = '600 11px system-ui';
+    const label = definition.label.toUpperCase();
+    const y = 30;
+    context.globalAlpha = alpha * 0.55;
+    context.fillStyle = '#263b50';
+    context.fillText(label, this.width / 2 + 1, y + 1);
+    context.globalAlpha = alpha;
+    context.fillStyle = '#f4d5a0';
+    context.fillText(label, this.width / 2, y);
+    context.restore();
   }
 
   private drawObstacleWarning(context: CanvasRenderingContext2D, run: RunState): void {
@@ -2072,6 +2187,15 @@ export class SnowGameEngine {
     rows.push(`NEXT ${upcoming ? `${upcoming.kind} @+${Math.round(upcoming.x - run.rider.x)}px (${upcoming.plan!.patternId})` : '—'}`);
     const weather = this.environment.weatherEffects().map((effect) => `${effect.kind} ${effect.intensity.toFixed(2)}`).join(' · ');
     rows.push(`WEATHER ${weather || 'clear'}`);
+    // Phase 9D — active special event, its envelope and the next window.
+    const eventReport = this.events.report();
+    const nextWindow = run && eventReport.windows.find((window) => window.endX > run.rider.x);
+    const eventText = eventReport.active
+      ? `${eventReport.active.eventId} ${(eventReport.active.intensity * 100).toFixed(0)}% · ${Math.round(eventReport.active.remainingPx)}px left`
+      : eventReport.suppressed ? 'suppressed (dev none)'
+        : nextWindow ? `— · next ${nextWindow.eventId} @+${Math.round(nextWindow.startX - run!.rider.x)}px`
+          : '—';
+    rows.push(`EVENT ${eventText}${eventReport.forced ? ` · force ${eventReport.forced}` : ''}`);
     const chunk = this.terrain?.describe(run.rider.x);
     rows.push(`TERRAIN ${chunk ? `L${chunk.level} chunk ${chunk.index} · ${chunk.pattern} · complexity ${directive ? directive.terrainComplexity.toFixed(2) : '—'}` : '—'} · jump reach ${directive ? `${directive.riderEnvelope.minJumpDistance}–${directive.riderEnvelope.maxJumpDistance}px` : '—'}`);
     const active = level.allowedObstacles.filter((id) => obstacleReady(id));
