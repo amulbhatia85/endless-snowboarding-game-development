@@ -6,7 +6,9 @@ import { EnvironmentManager, decorationOverlapsGameplay, type EnvironmentView, t
 import { createLevelRandom, LevelManager } from './levelManager';
 import { DifficultyManager, type DifficultyDirective } from './difficulty';
 
-import { BIKES, RIDERS, MISSIONS, MISSION_BONUS } from './progression';
+import { BIKES, RIDERS, TRAILS, MISSIONS, MISSION_BONUS, isUnlocked, requirementsMet, findCosmetic, type BikeEntry, type RiderEntry, type TrailEntry, type UnlockContext } from './progression';
+import { Wallet, REWARD_CONFIG, type LevelRewardBreakdown } from './wallet';
+import { readLifetime, getAchievements, readUnlockedAchievements } from './profile';
 
 export type GameScreen = 'menu' | 'playing' | 'paused' | 'crashed' | 'gameover';
 export type LevelPhase = 'riding' | 'approach' | 'entering' | 'celebrating' | 'exiting' | 'finished';
@@ -19,9 +21,20 @@ export interface HudSnapshot {
   coins: number;
   combo: number;
   elapsed: number;
-  level?: { number: number; name: string; score: number; target: number; phase: LevelPhase; completed: number };
+  level?: {
+    number: number;
+    name: string;
+    score: number;
+    target: number;
+    phase: LevelPhase;
+    completed: number;
+    coinsCollected: number;
+    reward: LevelRewardBreakdown | null;
+  };
   mission?: { label: string; progress: number; target: number; complete: boolean };
   powers: { kind: PowerKind; seconds?: number }[];
+  /** Phase 7 — persistent glowstone balance (menus & completion screen). */
+  wallet?: { balance: number };
 }
 
 export interface RunResult extends HudSnapshot {
@@ -169,6 +182,12 @@ interface RunState {
   over: boolean;
   invulnerableUntil: number;
   crashReason: string;
+  /** Phase 7 — wallet bookkeeping and per-level reward context. */
+  coinsAtLevelStart: number;
+  walletCommittedCoins: number;
+  crashesThisLevel: number;
+  flipsThisLevel: number;
+  levelReward: LevelRewardBreakdown | null;
 }
 
 // Phase 4: all visual theming (palettes, parallax, weather, decorations) now
@@ -194,8 +213,21 @@ function isRunCheckpoint(value: unknown): value is RunState {
   if (!rider || !['x', 'y', 'vy', 'speed', 'rotation', 'angularVelocity', 'totalSpin', 'airTime']
     .every((key) => finite(rider[key as keyof Rider])) || !rider.grounded || rider.fallingInto
     || rider.speed < 0 || rider.x !== run.distance || rider.x < 0) return false;
-  if (!run.mission || !MISSIONS.some((mission) => mission.metric === run.mission.metric
-    && mission.target === run.mission.target && mission.label === run.mission.label)) return false;
+    if (!run.mission || !MISSIONS.some((mission) => mission.metric === run.mission.metric
+      && mission.target === run.mission.target && mission.label === run.mission.label)) return false;
+    // Phase 7 fields stay optional so pre-Phase-7 checkpoints remain valid;
+    // when present they must be consistent with the run's coin counter.
+    if (run.coinsAtLevelStart !== undefined && !(nonnegative(run.coinsAtLevelStart) && run.coinsAtLevelStart <= run.coins)) return false;
+    if (run.walletCommittedCoins !== undefined && !(nonnegative(run.walletCommittedCoins) && run.walletCommittedCoins <= run.coins)) return false;
+    if (run.crashesThisLevel !== undefined && !nonnegative(run.crashesThisLevel)) return false;
+    if (run.flipsThisLevel !== undefined && !nonnegative(run.flipsThisLevel)) return false;
+    if (run.levelReward !== undefined && run.levelReward !== null) {
+      const reward = run.levelReward;
+      if (!Number.isSafeInteger(reward.level) || reward.level < 1
+        || ![reward.collected, reward.completion, reward.cleanRun, reward.flips, reward.milestone, reward.total]
+          .every(nonnegative) || reward.total !== reward.collected + reward.completion + reward.cleanRun
+          + reward.flips + reward.milestone) return false;
+    }
   const kinds: ObstacleKind[] = ['coin', 'rock', 'tree', 'gap', 'ramp', 'log', 'swinging-log', ...POWER_ORDER];
   if (!Array.isArray(run.objects) || run.objects.length > 2000 || !run.objects.every((object) =>
     object && kinds.includes(object.kind) && finite(object.x)
@@ -282,13 +314,15 @@ export class SnowGameEngine {
   private jumpQueued = false;
   private parked = false;
   private graphicsQuality: GraphicsQuality = 'auto';
-  private bike: (typeof BIKES)[number] = BIKES[0];
-  private character: (typeof RIDERS)[number] = RIDERS[0];
+  private bike: BikeEntry = BIKES[0];
+  private character: RiderEntry = RIDERS[0];
+  private trail: TrailEntry = TRAILS[0];
   private nextMission = Math.floor(Math.random() * MISSIONS.length);
 
-  setRiderSetup(bike: (typeof BIKES)[number], character: (typeof RIDERS)[number]): void {
+  setRiderSetup(bike: BikeEntry, character: RiderEntry, trail: TrailEntry = TRAILS[0]): void {
     this.bike = bike;
     this.character = character;
+    this.trail = trail;
   }
 
   private get lighterGraphics(): boolean {
@@ -296,6 +330,8 @@ export class SnowGameEngine {
   }
 
   readonly levels: LevelManager<RunState>;
+  /** Phase 7 — persistent glowstone wallet (rewards, purchases, balance). */
+  readonly wallet: Wallet;
   private checkpointElapsed = 0;
   private terrain?: TerrainWorld;
   private readonly obstaclePlanner = new ObstaclePlanner();
@@ -397,6 +433,10 @@ export class SnowGameEngine {
       initialLevel: preview ? previewLevel : undefined,
       storage: previewStorage,
     });
+    // Phase 7 — the wallet follows the same sandbox rules as the level
+    // manager: dev/preview sessions get an in-memory balance so real saves
+    // are never touched, and purchases there can never leak into progress.
+    this.wallet = new Wallet({ storage: sandbox ? previewStorage : undefined });
     this.environment.setLevel(this.levels.current);
     const checkpoint = this.levels.checkpoint;
     if (checkpoint && checkpoint.levelIndex + 1 === this.levels.current.number
@@ -405,6 +445,12 @@ export class SnowGameEngine {
       this.run = JSON.parse(JSON.stringify(checkpoint)) as RunState;
       this.parked = true;
       this.checkpointElapsed = this.run.elapsed;
+      // Phase 7 fields default gracefully for pre-Phase-7 checkpoints.
+      this.run.coinsAtLevelStart ??= 0;
+      this.run.walletCommittedCoins ??= 0;
+      this.run.crashesThisLevel ??= 0;
+      this.run.flipsThisLevel ??= 0;
+      this.run.levelReward ??= null;
     } else if (checkpoint) {
       this.levels.restartAttempt();
     }
@@ -499,6 +545,11 @@ export class SnowGameEngine {
       over: false,
       invulnerableUntil: 0,
       crashReason: '',
+      coinsAtLevelStart: 0,
+      walletCommittedCoins: 0,
+      crashesThisLevel: 0,
+      flipsThisLevel: 0,
+      levelReward: null,
     };
     this.nextMission = (this.nextMission + 1) % MISSIONS.length;
     this.parked = false;
@@ -582,6 +633,7 @@ export class SnowGameEngine {
 
   returnToMenu(): void {
     if (this.run && !this.run.over) this.syncLevelScore(this.run);
+    if (this.run) this.commitRunCoins(this.run); // abandoned runs keep their stones
     this.levels.restartAttempt();
     this.environment.setLevel(this.levels.current);
     this.held = false;
@@ -596,9 +648,47 @@ export class SnowGameEngine {
     if (this.status !== 'crashed' || !this.run) return;
     const result = { ...this.makeHud(this.run), tricks: this.run.tricks, reason: this.run.crashReason };
     this.syncLevelScore(this.run);
+    this.commitRunCoins(this.run); // Phase 7 — bank the glowstones that were collected
     this.levels.restartAttempt();
     this.setStatus('gameover');
     this.callbacks.onGameOver(result);
+  }
+
+  /**
+   * Phase 7 — banks collected glowstones whenever a run ends or is abandoned.
+   * Idempotent through the committed-coins watermark, so crashes, revives,
+   * restarts and abandoned runs can never double-credit the wallet.
+   */
+  private commitRunCoins(run: RunState): void {
+    const pending = run.coins - run.walletCommittedCoins;
+    if (pending > 0) {
+      this.wallet.deposit(pending);
+      run.walletCommittedCoins = run.coins;
+    }
+  }
+
+  /**
+   * Phase 7 — settles glowstone earnings the moment a level's completion
+   * condition is satisfied (target + safe house reached). Idempotent: an
+   * interrupted-and-replayed level only earns its freshly collected stones,
+   * never a second helping of one-time rewards.
+   */
+  private settleLevelRewards(run: RunState): void {
+    const level = this.levels.current.number;
+    const pending = Math.max(0, run.coins - run.walletCommittedCoins);
+    const breakdown = this.wallet.grantLevelRewards({
+      level,
+      collected: pending,
+      cleanRun: run.crashesThisLevel === 0,
+      flips: run.flipsThisLevel,
+    });
+    if (!breakdown) {
+      if (pending > 0) this.wallet.deposit(pending);
+      run.levelReward = { level, collected: pending, completion: 0, cleanRun: 0, flips: 0, milestone: 0, total: pending };
+    } else {
+      run.levelReward = breakdown;
+    }
+    run.walletCommittedCoins = run.coins;
   }
 
   /**
@@ -616,6 +706,46 @@ export class SnowGameEngine {
       this.syncLevelScore(run);
     }
     return true;
+  }
+
+  /** Phase 7 — wallet snapshot for the rewards UI and completion screen. */
+  getWalletView(): { balance: number; lifetimeEarned: number; owned: readonly string[]; rewardedThrough: number } {
+    return {
+      balance: this.wallet.balance,
+      lifetimeEarned: this.wallet.lifetimeEarned,
+      owned: this.wallet.owned,
+      rewardedThrough: this.wallet.rewardedThrough,
+    };
+  }
+
+  /** Phase 7 — everything the unlock rules need, gathered in one place. */
+  unlockContext(): UnlockContext {
+    const stats = readLifetime([]);
+    const unlocked = new Set([
+      ...readUnlockedAchievements(),
+      ...getAchievements(stats).filter((achievement) => achievement.unlocked).map((achievement) => achievement.id),
+    ]);
+    return {
+      bestDistance: stats.bestDistance,
+      bestTricks: stats.bestTricks,
+      completedLevels: this.levels.completedThrough,
+      owned: this.wallet.owned,
+      achievements: [...unlocked],
+    };
+  }
+
+  /**
+   * Phase 7 — purchases a cosmetic with wallet glowstones. Locked items
+   * (missing prerequisites) and unaffordable prices are rejected; a
+   * successful purchase deducts exactly once and records ownership.
+   */
+  purchaseUnlockable(id: string): 'ok' | 'owned' | 'locked' | 'insufficient' | 'invalid' {
+    const entry = findCosmetic(id);
+    if (!entry) return 'invalid';
+    const context = this.unlockContext();
+    if (isUnlocked(entry, context)) return 'owned';
+    if (!requirementsMet(entry, context)) return 'locked';
+    return this.wallet.purchase(id, entry.cost ?? 0);
   }
 
   revive(): boolean {
@@ -820,12 +950,18 @@ export class SnowGameEngine {
       const count = 3 + Math.floor(random() * 3);
       for (let index = 0; index < count; index += 1) {
         const curve = count < 2 ? 0 : Math.sin((index / (count - 1)) * Math.PI);
-        run.objects.push({
-          kind: 'coin',
-          x: start + index * 38,
-          offset: 38 + curve * 24,
-          phase: random() * TAU,
-        });
+        const coinX = start + index * 38;
+        // Phase 7 — never drop a glowstone inside a hazard's collision space;
+        // arcs simply skip those spots (still reachable by normal riding and
+        // small jumps, never inside rocks, trees or logs).
+        if (!this.coinBlocked(run, coinX)) {
+          run.objects.push({
+            kind: 'coin',
+            x: coinX,
+            offset: 38 + curve * 24,
+            phase: random() * TAU,
+          });
+        }
       }
       run.nextCoinX += 310 + random() * 260;
     }
@@ -860,6 +996,10 @@ export class SnowGameEngine {
         recentPatterns: run.recentPatterns,
       });
       run.objects.push(...plan.obstacles);
+      // Phase 7 — coins that now sit inside a newly placed hazard's collision
+      // space are removed so no glowstone is ever unreachable or dangerous.
+      run.objects = run.objects.filter((object) =>
+        object.kind !== 'coin' || !this.coinBlocked(run, object.x));
       run.hazardClearUntil = Math.max(run.hazardClearUntil ?? 0, plan.clearUntil);
       for (const obstacle of plan.obstacles) {
         if (obstacle.bridged) run.nextBridgeX = obstacle.x + (obstacle.width ?? 0) + 4500;
@@ -882,6 +1022,24 @@ export class SnowGameEngine {
 
   private rampAt(run: RunState, x: number): Obstacle | undefined {
     return run.objects.find((object) => object.kind === 'ramp' && x >= object.x && x < object.x + 100);
+  }
+
+  /**
+   * Phase 7 — true when a glowstone at x would sit inside a hazard: within a
+   * collision obstacle's radius plus padding, or over an unbridged gap's span.
+   * Ramps and bridges are safe to ride, so coins above them stay.
+   */
+  private coinBlocked(run: RunState, x: number): boolean {
+    return run.objects.some((object) => {
+      if (object.kind === 'gap') {
+        return !object.bridged && x > object.x - 30 && x < object.x + (object.width ?? 60) + 30;
+      }
+      if (object.kind !== 'rock' && object.kind !== 'tree' && object.kind !== 'log' && object.kind !== 'swinging-log') {
+        return false;
+      }
+      const radius = OBSTACLE_REGISTRY[object.kind].collision?.radius ?? 20;
+      return Math.abs(object.x - x) <= radius + 26;
+    });
   }
 
   private rampSurface(ramp: Obstacle, x: number): number {
@@ -1128,6 +1286,10 @@ export class SnowGameEngine {
         rider.speed = 0;
         this.syncLevelScore(run);
         this.levels.markSafeHouseReached();
+        // Phase 7 — the completion condition is satisfied here: settle the
+        // one-time rewards and bank the level's collected glowstones before
+        // the completion card is shown.
+        this.settleLevelRewards(run);
         run.levelPhase = 'celebrating';
         run.sceneTime = 0;
         // Cross-fade the whole environment while the rider is inside the
@@ -1148,6 +1310,11 @@ export class SnowGameEngine {
         run.levelIndex = nextLevel.number - 1;
         run.levelStartScore = this.runScore(run);
         run.levelStartX = rider.x;
+        // Phase 7 — the new level starts with a clean reward slate.
+        run.coinsAtLevelStart = run.coins;
+        run.crashesThisLevel = 0;
+        run.flipsThisLevel = 0;
+        run.levelReward = null;
         run.terrainOrigins ??= [];
         run.terrainOrigins.push({ level: nextLevel.number, x: rider.x, offset: house.groundY - this.height * 0.605 });
         this.terrain = this.createTerrain(run.terrainOrigins);
@@ -1233,6 +1400,7 @@ export class SnowGameEngine {
       else run.combo = 1;
       run.lastTrickAt = run.elapsed;
       run.tricks += flips;
+      run.flipsThisLevel += flips;
       const base = 250 * flips + Math.max(0, flips - 1) * 130;
       const multiplier = 1 + Math.min(run.combo - 1, 3) * 0.5;
       const cleanBonus = angleError < 0.48 ? 100 : 0;
@@ -1269,8 +1437,9 @@ export class SnowGameEngine {
       }
 
       if (power) {
-        if (power === 'magnet') run.magnetUntil = run.elapsed + 10;
-        if (power === 'double') run.doubleUntil = run.elapsed + 12;
+        // Phase 7 — ability durations live in the reward configuration.
+        if (power === 'magnet') run.magnetUntil = run.elapsed + REWARD_CONFIG.abilities.magnetSeconds;
+        if (power === 'double') run.doubleUntil = run.elapsed + REWARD_CONFIG.abilities.doubleSeconds;
         if (power === 'shield') run.shield = true;
         this.burst(run, x, y, 15, POWERS[power].color, 110, -45);
         this.popup(run, x, y - 16, POWERS[power].label.toUpperCase(), POWERS[power].color);
@@ -1322,6 +1491,7 @@ export class SnowGameEngine {
     if (run.over) return;
     run.over = true;
     run.crashReason = reason;
+    run.crashesThisLevel += 1;
     run.distance = run.rider.x;
     this.syncLevelScore(run);
     this.held = false;
@@ -1364,6 +1534,7 @@ export class SnowGameEngine {
     if (run.doubleUntil > run.elapsed) powers.push({ kind: 'double', seconds: Math.ceil(run.doubleUntil - run.elapsed) });
     return {
       powers,
+      wallet: { balance: this.wallet.balance },
       level: {
         number: run.levelIndex + 1,
         name: this.levels.current.name,
@@ -1371,6 +1542,8 @@ export class SnowGameEngine {
         target: this.levels.current.targetScore,
         phase: run.levelPhase,
         completed: this.levels.completedThrough + (this.levels.safeHouseReached ? 1 : 0),
+        coinsCollected: Math.max(0, run.coins - run.coinsAtLevelStart),
+        reward: run.levelReward,
       },
       mission: {
         label: run.mission.label,
@@ -2391,13 +2564,16 @@ export class SnowGameEngine {
     if (run.trail.length < 2) return;
     context.save();
     context.lineCap = 'round';
+    // Phase 7 — cosmetic trail colour overrides the palette glow (physics,
+    // width and fade are untouched; purely visual).
+    const groundColor = this.trail.color ?? palette.glow;
     for (let index = 1; index < run.trail.length; index += 1) {
       const previous = run.trail[index - 1];
       const current = run.trail[index];
       const alpha = clamp(1 - current.age / 0.48, 0, 1) * 0.36;
       if (alpha <= 0) continue;
       context.globalAlpha = alpha;
-      context.strokeStyle = current.y < this.terrainAt(current.x) - 30 ? '#ffffff' : palette.glow;
+      context.strokeStyle = current.y < this.terrainAt(current.x) - 30 ? '#ffffff' : groundColor;
       context.lineWidth = 1 + alpha * 3;
       context.beginPath();
       context.moveTo(previous.x - cameraX, previous.y);

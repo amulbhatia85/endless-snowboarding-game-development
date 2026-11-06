@@ -5,7 +5,11 @@ import { Haptics, ImpactStyle, NotificationType } from '@capacitor/haptics';
 import { SnowGameEngine, type GameScreen, type GraphicsQuality, type HudSnapshot, type RunResult, type SoundEvent } from './game/engine';
 import { AudioManager, type AudioSettings } from './game/audio';
 import { AdService } from './game/ads';
-import { BIKES, RIDERS, MISSION_BONUS } from './game/progression';
+import {
+  BIKES, RIDERS, TRAILS, MISSION_BONUS,
+  isUnlocked, requirementsMet, requirementText, resolveSelections,
+  type CosmeticEntry, type UnlockContext,
+} from './game/progression';
 import {
   getAchievements,
   persistUnlockedAchievements,
@@ -48,13 +52,14 @@ function formatNumber(value: number): string {
   return Math.max(0, Math.floor(value)).toLocaleString('en-US');
 }
 
-type MenuView = 'home' | 'achievements' | 'leaderboard' | 'settings' | 'how' | 'credits' | 'privacy';
+type MenuView = 'home' | 'achievements' | 'leaderboard' | 'rewards' | 'settings' | 'how' | 'credits' | 'privacy';
 
 interface PlayerPreferences {
   vibration: boolean;
   quality: GraphicsQuality;
   bike: string;
   rider: string;
+  trail: string;
 }
 
 const PREFERENCES_KEY = 'afterglow-preferences-v1';
@@ -66,10 +71,11 @@ function readPreferences(): PlayerPreferences {
       vibration: parsed.vibration !== false,
       bike: typeof parsed.bike === 'string' ? parsed.bike : BIKES[0].name,
       rider: typeof parsed.rider === 'string' ? parsed.rider : RIDERS[0].name,
+      trail: typeof parsed.trail === 'string' ? parsed.trail : TRAILS[0].name,
       quality: parsed.quality === 'high' || parsed.quality === 'balanced' ? parsed.quality : 'auto',
     };
   } catch {
-    return { vibration: true, quality: 'auto', bike: BIKES[0].name, rider: RIDERS[0].name };
+    return { vibration: true, quality: 'auto', bike: BIKES[0].name, rider: RIDERS[0].name, trail: TRAILS[0].name };
   }
 }
 
@@ -168,6 +174,9 @@ export default function App() {
   const [lifetime, setLifetime] = useState<LifetimeStats>(() => readLifetime(readScores()));
   const [showSettings, setShowSettings] = useState(false);
   const [menuView, setMenuView] = useState<MenuView>('home');
+  // Phase 7 — wallet mirror for the rewards UI (refreshed on surface changes).
+  const [walletView, setWalletView] = useState(() => engineRef.current?.getWalletView()
+    ?? { balance: 0, lifetimeEarned: 0, owned: [] as readonly string[], rewardedThrough: 0 });
   const [splashDone, setSplashDone] = useState(false);
   const [hasParkedRun, setHasParkedRun] = useState(false);
   const [rewardedReady, setRewardedReady] = useState(false);
@@ -404,10 +413,22 @@ export default function App() {
   }, [preferences.quality]);
 
   useEffect(() => {
-    const bike = BIKES.find((item) => item.name === preferences.bike && lifetime.bestDistance >= item.meters) ?? BIKES[0];
-    const rider = RIDERS.find((item) => item.name === preferences.rider && lifetime.bestTricks >= item.flips) ?? RIDERS[0];
-    engineRef.current?.setRiderSetup(bike, rider);
-  }, [preferences.bike, preferences.rider, lifetime.bestDistance, lifetime.bestTricks]);
+    // Phase 7 — resolve the equipped skins, falling back to the defaults when
+    // the preference points at a locked item (locked cosmetics never equip).
+    const engine = engineRef.current;
+    if (!engine) return;
+    const context: UnlockContext = engine.unlockContext();
+    const { bike, rider, trail } = resolveSelections(preferences, {
+      ...context,
+      bestDistance: lifetime.bestDistance,
+      bestTricks: lifetime.bestTricks,
+      achievements: [
+        ...context.achievements,
+        ...getAchievements(lifetime).filter((achievement) => achievement.unlocked).map((achievement) => achievement.id),
+      ],
+    });
+    engine.setRiderSetup(bike, rider, trail);
+  }, [preferences, lifetime, walletView.owned]);
 
   // Android hardware back button + native foreground/background handling.
   useEffect(() => {
@@ -489,6 +510,26 @@ export default function App() {
       }
       return next;
     });
+  };
+
+  // Phase 7 — keep the wallet mirror fresh whenever the player surfaces change.
+  useEffect(() => {
+    setWalletView(engineRef.current?.getWalletView()
+      ?? { balance: 0, lifetimeEarned: 0, owned: [] as readonly string[], rewardedThrough: 0 });
+  }, [screen, menuView, hud.level?.phase]);
+
+  /** Phase 7 — buys a cosmetic through the engine (single writer for the wallet). */
+  const buyCosmetic = (entry: CosmeticEntry): 'ok' | 'owned' | 'locked' | 'insufficient' | 'invalid' => {
+    const engine = engineRef.current;
+    if (!engine) return 'invalid';
+    const outcome = engine.purchaseUnlockable(entry.id);
+    if (outcome === 'ok') {
+      setWalletView(engine.getWalletView());
+      audio.achievement();
+    } else {
+      audio.click();
+    }
+    return outcome;
   };
 
   useEffect(() => {
@@ -856,6 +897,16 @@ export default function App() {
               <span className="level-completion-rule" />
               <p>50,000 POINTS · A JOURNEY WELL RIDDEN</p>
               <h2>LEVEL {hud.level.number} COMPLETED</h2>
+              {hud.level.reward && (
+                <div className="level-rewards" aria-label="Glowstones earned this level">
+                  <span className="reward-line">{hud.level.reward.collected} GLOWSTONES COLLECTED</span>
+                  <span className="reward-line">COMPLETION +{hud.level.reward.completion}</span>
+                  {hud.level.reward.cleanRun > 0 && <span className="reward-line">CLEAN RUN +{hud.level.reward.cleanRun}</span>}
+                  {hud.level.reward.flips > 0 && <span className="reward-line">BACKFLIPS +{hud.level.reward.flips}</span>}
+                  {hud.level.reward.milestone > 0 && <span className="reward-line">LEVEL MILESTONE +{hud.level.reward.milestone}</span>}
+                  <span className="reward-line reward-total">TOTAL +{hud.level.reward.total}</span>
+                </div>
+              )}
               <span className="level-continue-hint">TAP TO CONTINUE</span>
               <span className="level-completion-rule" />
             </div>
@@ -903,6 +954,9 @@ export default function App() {
             )}
             <button className="menu-button" onClick={() => { audio.click(); setMenuView('achievements'); }}>
               <span><strong>Achievements</strong><small>{achievements.filter((item) => item.unlocked).length} of {achievements.length} unlocked</small></span><span className="button-arrow"><ArrowIcon /></span>
+            </button>
+            <button className="menu-button" onClick={() => { audio.click(); setMenuView('rewards'); }}>
+              <span><strong>Rewards</strong><small><span className="menu-gem" aria-hidden="true">◆</span> {formatNumber(walletView.balance)} glowstones · riders, bikes & trails</small></span><span className="button-arrow"><ArrowIcon /></span>
             </button>
             <button className="menu-button" onClick={() => { audio.click(); setMenuView('leaderboard'); }}>
               <span><strong>Leaderboard</strong><small>Your best local rides</small></span><span className="button-arrow"><ArrowIcon /></span>
@@ -964,6 +1018,74 @@ export default function App() {
               </>
             )}
 
+            {menuView === 'rewards' && (
+              <>
+                <div className="eyebrow"><span className="eyebrow-dot" />EARN & EQUIP</div>
+                <h2 id="menu-page-title">Rewards</h2>
+                <p className="page-intro">Glowstones gathered on the trail fund riders, bicycles and trails.</p>
+                <div className="wallet-balance" role="status" aria-label="Glowstone balance">
+                  <span className="wallet-gem" aria-hidden="true">◆</span>
+                  <strong>{formatNumber(walletView.balance)}</strong>
+                  <small>GLOWSTONES</small>
+                </div>
+                {([
+                  { title: 'Characters', hint: 'Ride farther and land flips — or spend glowstones', items: RIDERS as readonly CosmeticEntry[], selected: preferences.rider, apply: (name: string) => updatePreferences({ rider: name }) },
+                  { title: 'Bicycles', hint: 'Cosmetic only — every frame rides the same', items: BIKES as readonly CosmeticEntry[], selected: preferences.bike, apply: (name: string) => updatePreferences({ bike: name }) },
+                  { title: 'Trails', hint: 'A touch of colour behind the wheel', items: TRAILS as readonly CosmeticEntry[], selected: preferences.trail, apply: (name: string) => updatePreferences({ trail: name }) },
+                ]).map((section) => {
+                  const context: UnlockContext = {
+                    bestDistance: lifetime.bestDistance,
+                    bestTricks: lifetime.bestTricks,
+                    completedLevels: engineRef.current?.levels.completedThrough ?? 0,
+                    owned: walletView.owned,
+                    achievements: getAchievements(lifetime).filter((achievement) => achievement.unlocked).map((achievement) => achievement.id),
+                  };
+                  return (
+                    <section className="rewards-section" key={section.title} aria-label={section.title}>
+                      <header>
+                        <h3>{section.title}</h3>
+                        <p>{section.hint}</p>
+                      </header>
+                      <div className="reward-grid">
+                        {section.items.map((entry) => {
+                          const unlocked = isUnlocked(entry, context);
+                          const equipped = section.selected === entry.name && unlocked;
+                          const purchasable = !unlocked && requirementsMet(entry, context);
+                          return (
+                            <article key={entry.id} className={`reward-card${equipped ? ' selected' : ''}${unlocked ? '' : ' locked'}`}>
+                              <div className="reward-swatch" aria-hidden="true">
+                                {'coat' in entry ? (
+                                  <>
+                                    <span style={{ background: entry.coat }} /><span style={{ background: entry.sleeve }} /><span style={{ background: entry.scarf }} /><span style={{ background: entry.cap }} />
+                                  </>
+                                ) : (
+                                  <span style={{ background: entry.color ?? 'linear-gradient(120deg, #ffe9b8, #a8e8ff)', width: '100%' }} />
+                                )}
+                              </div>
+                              <strong>{entry.name}</strong>
+                              {equipped ? (
+                                <span className="reward-state equipped">EQUIPPED</span>
+                              ) : unlocked ? (
+                                <button type="button" className="reward-action" onClick={() => { audio.click(); section.apply(entry.name); }}>
+                                  Equip
+                                </button>
+                              ) : purchasable ? (
+                                <button type="button" className="reward-action buy" onClick={() => buyCosmetic(entry)}>
+                                  Buy · {entry.cost} ◆
+                                </button>
+                              ) : (
+                                <span className="reward-state">{requirementText(entry)}</span>
+                              )}
+                            </article>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  );
+                })}
+              </>
+            )}
+
             {menuView === 'settings' && (
               <>
                 <div className="eyebrow"><span className="eyebrow-dot" />MAKE IT YOURS</div>
@@ -989,26 +1111,12 @@ export default function App() {
                   </div>
                 </div>
                 <div className="settings-section preference-rows">
-                  <label className="preference-row">
-                    <span><strong>Bicycle</strong><small>Unlock by riding farther in one run</small></span>
-                    <select className="ride-select" value={preferences.bike} onChange={(event) => updatePreferences({ bike: event.target.value })}>
-                      {BIKES.map((item) => (
-                        <option key={item.name} value={item.name} disabled={lifetime.bestDistance < item.meters}>
-                          {item.name}{lifetime.bestDistance < item.meters ? ` · ${formatNumber(item.meters)} m` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="preference-row">
-                    <span><strong>Character</strong><small>Unlock by landing flips in one run</small></span>
-                    <select className="ride-select" value={preferences.rider} onChange={(event) => updatePreferences({ rider: event.target.value })}>
-                      {RIDERS.map((item) => (
-                        <option key={item.name} value={item.name} disabled={lifetime.bestTricks < item.flips}>
-                          {item.name}{lifetime.bestTricks < item.flips ? ` · ${item.flips} flips` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                  <div className="preference-row">
+                    <span><strong>Rider, bicycle & trail</strong><small>Equip what you've earned or purchased</small></span>
+                    <button type="button" className="reward-link" onClick={() => { audio.click(); setMenuView('rewards'); }}>
+                      {preferences.rider} · {preferences.bike} · {preferences.trail} <span>›</span>
+                    </button>
+                  </div>
                 </div>
                 <div className="settings-links">
                   <button onClick={() => { audio.click(); setMenuView('privacy'); }}>Privacy Policy <span>›</span></button>

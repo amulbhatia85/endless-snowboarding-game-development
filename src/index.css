@@ -1733,3 +1733,120 @@ kbd {
   .level-continue-hint { animation: none; opacity: 0.85; }
 }
 .dev-level-button.dev-finish { border-color: rgba(255, 217, 139, 0.55); color: #ffe9c2; }
+
+/* ── Phase 7 — rewards, wallet & unlockables ────────────────────────── */
+.menu-gem { color: #ffd98b; font-size: 11px; }
+.wallet-balance {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 14px 0 4px;
+  padding: 14px 18px;
+  border: 1px solid rgba(255, 217, 139, 0.35);
+  border-radius: 14px;
+  background: linear-gradient(160deg, rgba(255, 217, 139, 0.10), rgba(255, 255, 255, 0.03));
+}
+.wallet-balance .wallet-gem { color: #ffd98b; font-size: 18px; }
+.wallet-balance strong { font-size: 30px; letter-spacing: 0.04em; color: #ffe0a2; }
+.wallet-balance small { font-size: 9px; letter-spacing: 0.3em; color: #9db4c6; }
+.rewards-section { margin-top: 24px; }
+.rewards-section header h3 {
+  margin: 0;
+  font-size: 12px;
+  letter-spacing: 0.26em;
+  color: #e8f2f8;
+}
+.rewards-section header p { margin: 4px 0 10px; font-size: 11px; color: #9db4c6; }
+.reward-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 10px;
+}
+.reward-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.reward-card.selected {
+  border-color: rgba(255, 217, 139, 0.8);
+  box-shadow: inset 0 0 0 1px rgba(255, 217, 139, 0.45);
+}
+.reward-card.locked .reward-swatch { filter: grayscale(0.6); opacity: 0.65; }
+.reward-card strong { font-size: 13px; letter-spacing: 0.06em; color: #eef6fa; }
+.reward-swatch {
+  display: flex;
+  gap: 3px;
+  height: 30px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.22);
+}
+.reward-swatch span { flex: 1; }
+.reward-action {
+  padding: 7px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  color: #eef6fa;
+  font-size: 10px;
+  letter-spacing: 0.16em;
+  cursor: pointer;
+}
+.reward-action.buy { border-color: rgba(255, 217, 139, 0.55); color: #ffe9c2; }
+.reward-action:hover { background: rgba(255, 255, 255, 0.14); }
+.reward-state {
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  color: #9db4c6;
+  min-height: 14px;
+}
+.reward-state.equipped { color: #ffd98b; letter-spacing: 0.22em; }
+.reward-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #eef6fa;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+}
+.reward-link span { color: #ffd98b; }
+
+/* Completion card reward ledger (Phase 7) */
+.level-rewards {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+}
+.level-rewards .reward-line {
+  font-size: 9.5px;
+  letter-spacing: 0.24em;
+  color: #cfe2ee;
+  opacity: 0;
+  animation: continueHint 0.6s ease forwards;
+}
+.level-rewards .reward-line:nth-child(1) { animation-delay: 0.3s; }
+.level-rewards .reward-line:nth-child(2) { animation-delay: 0.55s; }
+.level-rewards .reward-line:nth-child(3) { animation-delay: 0.8s; }
+.level-rewards .reward-line:nth-child(4) { animation-delay: 1.05s; }
+.level-rewards .reward-line:nth-child(5) { animation-delay: 1.3s; }
+.level-rewards .reward-total {
+  color: #ffd98b;
+  font-weight: 700;
+  margin-top: 5px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  animation-delay: 1.55s !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .level-rewards .reward-line { animation: none; opacity: 0.9; }
+}
