@@ -673,6 +673,27 @@ export default function App() {
     engineRef.current?.finalizeRun();
   };
 
+  /**
+   * Phase 8 — RESTART on the crash screen. The crashed run is finalized
+   * exactly once first (coins banked, run recorded, achievements settled),
+   * any due interstitial plays, then the current level restarts from its
+   * beginning with a clean attempt. Completed levels, unlocks and the coin
+   * balance are untouched by design.
+   */
+  const restartFromCrash = async () => {
+    if (adBusy) return;
+    audio.click();
+    setAdBusy(true);
+    try {
+      engineRef.current?.finalizeRun();
+      await ads.showInterstitialIfDue();
+    } finally {
+      audio.setAdSuspended(false);
+      setAdBusy(false);
+    }
+    beginRun();
+  };
+
   const watchRewardedRevive = async () => {
     const engine = engineRef.current;
     if (!engine?.reviveAvailable || adBusy || pendingReviveRef.current) return;
@@ -1194,6 +1215,9 @@ export default function App() {
               <span><b>{formatNumber(crashResult.coins)}</b> GLOWSTONES</span>
               <span><b>{formatNumber(crashResult.speedKmh)}</b> KM/H</span>
             </div>
+            {crashResult.level && (
+              <p className="crash-level">LEVEL {crashResult.level.number} · {crashResult.level.name.toUpperCase()}</p>
+            )}
             {rewardedReady ? (
               <button className="primary-button revive-button" onClick={watchRewardedRevive} disabled={adBusy}>
                 <span>{adBusy ? 'Opening ad...' : 'Watch Ad & Revive'}</span><span className="button-arrow"><ArrowIcon /></span>
@@ -1202,7 +1226,10 @@ export default function App() {
               <p className="ad-unavailable">{ads.isNative ? 'Preparing a rewarded ad...' : 'Rewarded ads are available in the Android app.'}</p>
             )}
             {adNotice && <p className="ad-notice">{adNotice}</p>}
-            <button className="end-run-button" onClick={endRun} disabled={adBusy}>End Run</button>
+            <div className="crash-secondary">
+              <button className="end-run-button" onClick={restartFromCrash} disabled={adBusy}>Restart Level</button>
+              <button className="end-run-button" onClick={endRun} disabled={adBusy}>End Run</button>
+            </div>
             <span className="revive-rule">Complete a rewarded ad to continue this run</span>
           </div>
         </section>

@@ -8,6 +8,7 @@ import { DifficultyManager, type DifficultyDirective } from './difficulty';
 
 import { BIKES, RIDERS, TRAILS, MISSIONS, MISSION_BONUS, isUnlocked, requirementsMet, findCosmetic, type BikeEntry, type RiderEntry, type TrailEntry, type UnlockContext } from './progression';
 import { Wallet, REWARD_CONFIG, type LevelRewardBreakdown } from './wallet';
+import { RECOVERY_CONFIG } from './recovery';
 import { readLifetime, getAchievements, readUnlockedAchievements } from './profile';
 
 export type GameScreen = 'menu' | 'playing' | 'paused' | 'crashed' | 'gameover';
@@ -188,6 +189,8 @@ interface RunState {
   crashesThisLevel: number;
   flipsThisLevel: number;
   levelReward: LevelRewardBreakdown | null;
+  /** Phase 8 — cosmetic crash tumble state; present only while over. */
+  crashReaction?: { vx: number; vy: number; spin: number; elapsed: number };
 }
 
 // Phase 4: all visual theming (palettes, parallax, weather, decorations) now
@@ -228,6 +231,8 @@ function isRunCheckpoint(value: unknown): value is RunState {
           .every(nonnegative) || reward.total !== reward.collected + reward.completion + reward.cleanRun
           + reward.flips + reward.milestone) return false;
     }
+    // Checkpoints are riding-only states; a crash tumble can never be saved.
+    if (run.crashReaction !== undefined && run.crashReaction !== null) return false;
   const kinds: ObstacleKind[] = ['coin', 'rock', 'tree', 'gap', 'ramp', 'log', 'swinging-log', ...POWER_ORDER];
   if (!Array.isArray(run.objects) || run.objects.length > 2000 || !run.objects.every((object) =>
     object && kinds.includes(object.kind) && finite(object.x)
@@ -781,9 +786,13 @@ export class SnowGameEngine {
     rider.fallingInto = undefined;
     run.distance = rider.x;
     run.over = false;
-    run.invulnerableUntil = run.elapsed + 3;
+    run.crashReaction = undefined;
+    run.invulnerableUntil = run.elapsed + RECOVERY_CONFIG.reviveInvulnerabilitySeconds;
     run.crashReason = '';
-    run.cameraX = rider.x - this.width * 0.28;
+    // Phase 8 — restore camera tracking smoothly: apply part of the
+    // correction now and let the regular smoothed follow finish the ease.
+    const cameraTarget = rider.x - this.width * this.riderScreenPosition(run);
+    run.cameraX = run.cameraX + (cameraTarget - run.cameraX) * RECOVERY_CONFIG.reviveCameraCatchUp;
     run.cameraY = 0;
     run.shake = Math.max(run.shake, 2.5);
     this.held = false;
@@ -1493,6 +1502,15 @@ export class SnowGameEngine {
     run.crashReason = reason;
     run.crashesThisLevel += 1;
     run.distance = run.rider.x;
+    // Phase 8 — a brief, purely cosmetic tumble: the rider pops over the
+    // bars, slides and spins to a stop. The camera stays put, the score is
+    // already frozen, and no further collision logic runs while over.
+    run.crashReaction = {
+      vx: clamp(run.rider.speed * RECOVERY_CONFIG.crashTumbleSlideFactor, 0, 260),
+      vy: run.rider.grounded ? RECOVERY_CONFIG.crashTumblePopVelocity : Math.min(run.rider.vy, 0),
+      spin: RECOVERY_CONFIG.crashTumbleSpin,
+      elapsed: 0,
+    };
     this.syncLevelScore(run);
     this.held = false;
     this.jumpQueued = false;
@@ -1611,6 +1629,34 @@ export class SnowGameEngine {
   }
 
   private updateEffects(run: RunState, delta: number): void {
+    // Phase 8 — the crash tumble plays out while the crashed scene is on
+    // screen (the frame loop keeps calling this for paused/crashed/gameover).
+    const reaction = run.crashReaction;
+    if (run.over && reaction && reaction.elapsed < RECOVERY_CONFIG.crashTumbleSeconds) {
+      reaction.elapsed += delta;
+      const rider = run.rider;
+      rider.x += reaction.vx * delta;
+      reaction.vx *= Math.exp(-RECOVERY_CONFIG.crashTumbleSlideDecay * delta);
+      reaction.vy += 1_500 * delta;
+      rider.y += reaction.vy * delta;
+      rider.rotation += reaction.spin * delta;
+      reaction.spin *= Math.exp(-RECOVERY_CONFIG.crashTumbleSpinDecay * delta);
+      // Stop the slide against a solid obstacle; settle on the surface
+      // unless the rider is inside a gap (they keep falling, as they should).
+      const blocked = run.objects.some((object) =>
+        (object.kind === 'rock' || object.kind === 'tree' || object.kind === 'log' || object.kind === 'swinging-log')
+        && object.x > rider.x - 10 && object.x - rider.x < 24);
+      if (blocked) reaction.vx = 0;
+      if (!this.gapAt(run, rider.x) && !rider.fallingInto) {
+        const groundY = this.rideHeight(run, rider.x) - 5;
+        if (rider.y > groundY) {
+          rider.y = groundY;
+          reaction.vy = 0;
+          reaction.vx *= 0.55;
+          reaction.spin *= 0.45;
+        }
+      }
+    }
     run.particles = run.particles.filter((particle) => {
       particle.life -= delta;
       particle.x += particle.vx * delta;

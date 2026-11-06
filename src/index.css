@@ -1850,3 +1850,18 @@ kbd {
 @media (prefers-reduced-motion: reduce) {
   .level-rewards .reward-line { animation: none; opacity: 0.9; }
 }
+
+/* ── Phase 8 — crash & recovery ──────────────────────────────────────── */
+.crash-level {
+  margin: 2px 0 4px;
+  font-size: 10px;
+  letter-spacing: 0.28em;
+  color: #ffd98b;
+}
+.crash-secondary {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.crash-secondary .end-run-button { margin-top: 0; }

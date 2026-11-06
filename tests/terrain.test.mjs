@@ -11,7 +11,18 @@ function memoryStorage() {
   const values = new Map();
   return { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) };
 }
-function engine(storage = memoryStorage()) {
+// The default engine storage is pre-seeded with a fixed journey seed so the
+// generation-driven tests are deterministic run-to-run (an unseeded engine
+// draws a random level seed, which made the hazard-corridor test flaky).
+function seededStorage(seed = 20260101) {
+  const storage = memoryStorage();
+  storage.setItem(LEVEL_SAVE_KEY, JSON.stringify({
+    version: 1, journeySeed: seed, currentLevel: 1, unlockedThrough: 1,
+    completedThrough: 0, levelScore: 0, runScore: 0, lifetimeScore: 0, checkpoint: null,
+  }));
+  return storage;
+}
+function engine(storage = seededStorage()) {
   globalThis.localStorage = storage;
   globalThis.window = { addEventListener() {}, removeEventListener() {}, requestAnimationFrame() { return 0; }, cancelAnimationFrame() {} };
   return new SnowGameEngine({ getBoundingClientRect: () => ({ width: 900, height: 600 }), getContext: () => ({ setTransform() {} }) },
