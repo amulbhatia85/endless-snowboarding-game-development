@@ -54,6 +54,8 @@ export class AudioManager {
   private wind!: Loop;
   private storm!: Loop;
   private nightAir!: Loop;
+  /** Phase 9B — leaf rustle for forest themes. */
+  private leaves!: Loop;
 
   private schedulerId = 0;
   private musicOn = false;
@@ -194,6 +196,7 @@ export class AudioManager {
     this.wind = this.makeLoop('lowpass', 420, 0.9, this.ambientBus);
     this.storm = this.makeLoop('bandpass', 700, 0.5, this.ambientBus);
     this.nightAir = this.makeLoop('lowpass', 260, 0.7, this.ambientBus);
+    this.leaves = this.makeLoop('bandpass', 1650, 0.8, this.ambientBus);
 
     this.schedulerId = window.setInterval(() => this.schedule(), 90);
   }
@@ -430,15 +433,26 @@ export class AudioManager {
 
     // Wind – speed, air time, steep downhill and storms all push it up
     const airborne = playing && !s.grounded;
+    // Phase 9B — the environment tints the wind loop: alpine air is colder
+    // (higher filter), valley mist reads distant (lower level), the forest
+    // adds a high leaf rustle that breathes with the gusts.
+    const theme = s.theme ?? 'countryside';
+    const windTone = theme === 'snowy-mountains' ? 1.35 : theme === 'misty-mountains' ? 0.72 : 1;
+    const themeWind = theme === 'misty-mountains' ? -0.012 : theme === 'snowy-mountains' ? 0.014 : 0;
     const windLevel = playing
-      ? 0.035 + s.speed * 0.07 + (airborne ? 0.07 : 0) + Math.max(0, s.slope) * 0.09 + s.storm * 0.08
-      : 0.04 + s.storm * 0.06;
+      ? 0.035 + s.speed * 0.07 + (airborne ? 0.07 : 0) + Math.max(0, s.slope) * 0.09 + s.storm * 0.08 + themeWind
+      : 0.04 + s.storm * 0.06 + themeWind;
     this.wind.gain.gain.setTargetAtTime(windLevel, now, 0.35);
-    this.wind.filter.frequency.setTargetAtTime(320 + s.speed * 520 + (airborne ? 500 : 0) + s.storm * 300, now, 0.4);
+    this.wind.filter.frequency.setTargetAtTime((320 + s.speed * 520 + (airborne ? 500 : 0) + s.storm * 300) * windTone, now, 0.4);
 
     this.storm.gain.gain.setTargetAtTime(s.storm * 0.13, now, 0.8);
     this.storm.filter.frequency.setTargetAtTime(600 + Math.sin(now * 0.7) * 250, now, 0.5);
     this.nightAir.gain.gain.setTargetAtTime(s.night * 0.06, now, 1);
+
+    // Phase 9B — quiet forest rustle for the wooded themes only.
+    const rustle = theme === 'moonlit-forest' ? 0.02 + s.wind * 0.032 : theme === 'misty-mountains' ? 0.008 + s.wind * 0.016 : 0;
+    this.leaves.gain.gain.setTargetAtTime(rustle, now, 0.9);
+    this.leaves.filter.frequency.setTargetAtTime(1500 + s.wind * 900 + Math.sin(now * 0.5) * 180, now, 0.8);
 
     // Airy rotation whoosh while flipping
     if (s.spinning && !this.spinWhoosh) this.startSpinWhoosh();

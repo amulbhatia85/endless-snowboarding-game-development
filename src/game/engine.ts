@@ -3,6 +3,8 @@ import { OBSTACLE_REGISTRY, obstacleReady, swingingLogPose, iciclePose, branchPo
 import { flipProgress } from './riderPhysics';
 import { BICYCLE_PHYSICS, TerrainWorld, type TerrainOrigin } from './terrain';
 import { EnvironmentManager, decorationOverlapsGameplay, type EnvironmentView, type Palette } from './environment';
+import type { EnvironmentTheme } from './levelManager';
+import type { WeatherEffectConfig } from './weather';
 import { createLevelRandom, LevelManager, previewLevelForObstacle } from './levelManager';
 import { DifficultyManager, type DifficultyDirective } from './difficulty';
 
@@ -71,6 +73,10 @@ export interface AudioFrameState {
   slope: number;
   night: number;
   storm: number;
+  /** Phase 9B — active environment theme, drives ambient audio flavour. */
+  theme: EnvironmentTheme;
+  /** Phase 9B — cosmetic wind strength 0..1 for ambience shaping. */
+  wind: number;
 }
 
 export const POWERS = {
@@ -752,6 +758,32 @@ export class SnowGameEngine {
     return true;
   }
 
+  /**
+   * Phase 9B developer tool (`?dev=1`): pin the weather to a preset so any
+   * condition can be previewed in every environment regardless of level
+   * config. `null` (or 'auto') restores the configured weather.
+   */
+  setWeatherPreview(preset: 'auto' | 'clear' | 'snow' | 'fog' | 'wind' | 'storm' | null): void {
+    this.devStorm = preset === 'storm' ? 0.85 : 0;
+    const presets: Record<string, readonly WeatherEffectConfig[]> = {
+      clear: [],
+      snow: [{ kind: 'snow', intensity: 0.8 }],
+      fog: [{ kind: 'fog', intensity: 0.65 }],
+      wind: [{ kind: 'wind', intensity: 0.65 }],
+      storm: [{ kind: 'snow', intensity: 0.9 }, { kind: 'wind', intensity: 0.85 }, { kind: 'fog', intensity: 0.3 }],
+    };
+    this.environment.setWeatherPreview(preset && preset !== 'auto' ? presets[preset] : null);
+  }
+
+  /**
+   * Phase 9B developer tool (`?dev=1`): freeze the day cycle at a fixed phase
+   * so dawn / day / sunset / night lighting can be audited per environment.
+   * `null` restores the continuous world+clock cycle.
+   */
+  setDayPhasePreview(phase: number | null): void {
+    this.dayPhasePreview = phase === null ? undefined : ((phase % 1) + 1) % 1;
+  }
+
   /** Phase 7 — wallet snapshot for the rewards UI and completion screen. */
   getWalletView(): { balance: number; lifetimeEarned: number; owned: readonly string[]; rewardedThrough: number } {
     return {
@@ -872,6 +904,11 @@ export class SnowGameEngine {
       while (origins.length > 2 && origins[1].x < terrainCamera - this.width * 2 - 640) origins.shift();
     }
     this.terrain?.maintain(terrainCamera, this.width);
+    // Phase 9B — the day-cycle phase is computed once per frame and shared by
+    // the environment update, the renderer and the audio state so the sun,
+    // palettes, ambience and music never drift apart.
+    const phase = this.currentDayPhase();
+    this.lastNight = this.environment.palette(phase).night;
     // Environment and weather advance every frame (all statuses) so the menu
     // stays alive and level cross-fades run even while the world is parked.
     this.environment.update(delta, {
@@ -882,6 +919,8 @@ export class SnowGameEngine {
       storm: this.stormLevel(),
       lighter: this.lighterGraphics,
       groundAt: this.environmentView.groundAt,
+      phase,
+      night: this.lastNight,
     });
     this.lastEnvironmentCameraX = terrainCamera;
     this.draw();
@@ -896,15 +935,32 @@ export class SnowGameEngine {
         slope: rider && rider.grounded ? Math.sin(this.terrainAngle(rider.x)) : 0,
         night: this.lastNight,
         storm: this.stormLevel(),
+        theme: this.environment.theme,
+        wind: this.environment.windStrength,
       });
     }
     this.frameHandle = window.requestAnimationFrame(this.frame);
   };
 
   private lastNight = 0;
+  /** Phase 9B dev previews — fixed day phase / storm strength (null = live). */
+  private dayPhasePreview?: number;
+  private devStorm = 0;
 
   private stormLevel(): number {
+    if (this.devStorm > 0) return this.devStorm;
     return Math.pow(Math.max(0, Math.sin(this.clock * 0.12 - 0.8)), 5);
+  }
+
+  /**
+   * The continuous day-cycle phase. Timing and behaviour are unchanged from
+   * earlier phases: world distance plus wall clock wrap over one full day.
+   * The only override is the developer day-phase preview (`?dev=1`).
+   */
+  private currentDayPhase(): number {
+    if (this.dayPhasePreview !== undefined) return this.dayPhasePreview;
+    const worldX = this.status === 'menu' || !this.run ? this.clock * 16 : this.run.rider.x;
+    return (0.62 + (worldX + this.clock * 18) / 25500) % 1;
   }
 
   private emit(event: SoundEvent): void {
@@ -1822,7 +1878,7 @@ export class SnowGameEngine {
     const menuX = this.clock * 16;
     const cameraX = isMenu ? menuX - width * 0.72 : run.cameraX;
     const worldX = isMenu ? menuX : run.rider.x;
-    const cycle = (0.62 + (worldX + this.clock * 18) / 25500) % 1;
+    const cycle = this.currentDayPhase();
     const palette = this.environment.palette(cycle);
     this.lastNight = palette.night;
 
@@ -1857,7 +1913,9 @@ export class SnowGameEngine {
       for (const house of run.houses) this.drawFinishHouse(context, house, cameraX, run);
     }
     this.drawTerrain(context, width, height, cameraX, palette, run);
-    this.environment.drawDecorations(context, view, this.decorationReserved);
+    // Phase 9B — environment-specific crest detail rides the collision surface.
+    this.environment.drawGroundDetail(context, view, palette);
+    this.environment.drawDecorations(context, view, this.decorationReserved, palette);
     if (run && !isMenu) this.drawTrail(context, run, cameraX, palette);
     if (run && !isMenu) this.drawObjects(context, run, cameraX, palette);
     if (run && !isMenu) this.drawParticles(context, run, cameraX);
@@ -1869,6 +1927,8 @@ export class SnowGameEngine {
     if (run && !isMenu) this.drawPopups(context, run, cameraX);
     if (run && !isMenu && this.obstacleDebug) this.drawObstacleDebug(context, run, cameraX);
     this.environment.drawAmbient(context, view);
+    // Phase 9B — sparse foreground silhouettes pass in front of the gameplay.
+    this.environment.drawForeground(context, view, palette);
     context.restore();
     // Screen-space weather stays outside the camera shake.
     this.environment.drawWeather(context, view, palette);

@@ -73,6 +73,25 @@ export interface AmbientStyle {
   flickerMin: number;
   flickerMax: number;
   drift: number;
+  /** Particles only appear once night falls (fireflies). */
+  nightOnly?: boolean;
+  /** Particles fade out as night falls (pollen). */
+  dayOnly?: boolean;
+}
+
+/**
+ * Phase 9B — per-environment ground *appearance*. Purely cosmetic: the engine
+ * still samples the very same collision surface; these styles only decorate
+ * the crest line that physics already rides on.
+ */
+export interface GroundStyle {
+  kind: 'grass' | 'snow' | 'rocky' | 'forest';
+  /** 0..1 density of crest detail (blades / sparkles / pebbles / roots). */
+  detail: number;
+  /** Accent colour drawn along the surface crest. */
+  crest: string;
+  /** Secondary speckle colour for dots and strokes. */
+  speckle: string;
 }
 
 export interface EnvironmentDefinition {
@@ -93,6 +112,12 @@ export interface EnvironmentDefinition {
   decorations: { entries: ReadonlyArray<{ kind: DecorationKind; weight: number }>; spacing: number };
   decorationColors: { foliage: string; foliageDark: string; accent: string; stone: string };
   ambient: AmbientStyle | null;
+  /** Phase 9B — cosmetic ground appearance (never touches collision). */
+  ground: GroundStyle;
+  /** Phase 9B — 0..1 strength of drifting mist hugging the terrain crest. */
+  groundMist: number;
+  /** Phase 9B — 0..1 strength of soft light shafts filtering through. */
+  lightShafts: number;
   /** Wheel spray / landing burst tuning — colours only, never physics. */
   spray: { color: string; rate: number; size: number };
   burst: { heavy: string; soft: string };
@@ -119,6 +144,10 @@ export interface EnvironmentUpdateInfo {
   storm: number;
   lighter: boolean;
   groundAt?: (x: number) => number;
+  /** Current day-cycle phase 0..1 (drives night-only ambience). */
+  phase?: number;
+  /** Resolved night factor 0..1 for this frame (defaults to phase lookup). */
+  night?: number;
 }
 
 export const PARALLAX_LAYER_COUNT = 4;
@@ -327,22 +356,36 @@ export class DecorationField {
 
 const COUNTRYSIDE: EnvironmentDefinition = {
   id: 'countryside',
+  // Phase 9B — a full day: dawn meadow, bright afternoon, golden sunset and
+  // a soft summer night, wrapping seamlessly back to dawn.
   stops: [
     {
       at: 0,
-      palette: { top: '#8fc8e8', horizon: '#fdeec9', far: '#9db8cd', middle: '#7ba381', near: '#63906a', snow: '#a4d088', snowShade: '#6eaf64', glow: '#ffe9b8', moon: '#fff6df', night: 0 },
+      palette: { top: '#7fb0d8', horizon: '#ffd9e0', far: '#9cb2cd', middle: '#7aa582', near: '#64916c', snow: '#9cc880', snowShade: '#6aab60', glow: '#ffd9b0', moon: '#fff2df', night: 0.18 },
     },
     {
       at: 0.38,
       palette: { top: '#6fb9e7', horizon: '#eef7e2', far: '#a4c1d4', middle: '#82ab86', near: '#689570', snow: '#98cd7c', snowShade: '#66a75f', glow: '#fff4cf', moon: '#fff6df', night: 0 },
     },
     {
-      at: 0.72,
-      palette: { top: '#7fb2d4', horizon: '#ffdba6', far: '#a2b7c8', middle: '#7c9f7d', near: '#648f68', snow: '#b1cf88', snowShade: '#74a463', glow: '#ffd9a0', moon: '#fff6df', night: 0.05 },
+      at: 0.64,
+      palette: { top: '#7d9fd0', horizon: '#ffcf96', far: '#a2b7c8', middle: '#7c9f7d', near: '#648f68', snow: '#b1cf88', snowShade: '#74a463', glow: '#ffc890', moon: '#fff0d8', night: 0.12 },
+    },
+    {
+      at: 0.82,
+      palette: { top: '#2c3f68', horizon: '#6a5c8e', far: '#55688c', middle: '#46607a', near: '#3a5464', snow: '#6d9470', snowShade: '#46704c', glow: '#c8b98f', moon: '#fff4dc', night: 0.55 },
+    },
+    {
+      at: 0.9,
+      palette: { top: '#1c2c52', horizon: '#43466f', far: '#3c4f74', middle: '#31475e', near: '#294052', snow: '#5c8462', snowShade: '#3a6142', glow: '#b9c6a8', moon: '#fdf6e3', night: 0.66 },
+    },
+    {
+      at: 0.965,
+      palette: { top: '#709cc4', horizon: '#e3c3cf', far: '#8ea3c0', middle: '#6f977d', near: '#5b8568', snow: '#92be7c', snowShade: '#63a05c', glow: '#f5d6af', moon: '#fff2df', night: 0.25 },
     },
     {
       at: 1,
-      palette: { top: '#8fc8e8', horizon: '#fdeec9', far: '#9db8cd', middle: '#7ba381', near: '#63906a', snow: '#a4d088', snowShade: '#6eaf64', glow: '#ffe9b8', moon: '#fff6df', night: 0 },
+      palette: { top: '#7fb0d8', horizon: '#ffd9e0', far: '#9cb2cd', middle: '#7aa582', near: '#64916c', snow: '#9cc880', snowShade: '#6aab60', glow: '#ffd9b0', moon: '#fff2df', night: 0.18 },
     },
   ],
   layers: [
@@ -356,8 +399,8 @@ const COUNTRYSIDE: EnvironmentDefinition = {
   weather: [{ kind: 'wind', intensity: 0.22 }],
   clouds: { count: 7, opacity: 0.2, speed: 1, tint: '#fffaf0' },
   sun: 1,
-  moon: 0,
-  stars: 0,
+  moon: 0.55,
+  stars: 26,
   shootingStars: false,
   flock: true,
   decorations: {
@@ -365,29 +408,45 @@ const COUNTRYSIDE: EnvironmentDefinition = {
     spacing: 74,
   },
   decorationColors: { foliage: '#4f8f52', foliageDark: '#3c7442', accent: '#f6e9b2', stone: '#98a5a8' },
-  ambient: { count: 9, color: '#fff4c8', glow: 0, sizeMin: 0.8, sizeMax: 1.5, hoverMin: 14, hoverMax: 110, flickerMin: 0.05, flickerMax: 0.22, drift: 7 },
+  ambient: { count: 9, color: '#fff4c8', glow: 0, sizeMin: 0.8, sizeMax: 1.5, hoverMin: 14, hoverMax: 110, flickerMin: 0.05, flickerMax: 0.22, drift: 7, dayOnly: true },
+  ground: { kind: 'grass', detail: 1, crest: '#dff0b8', speckle: '#577a3e' },
+  groundMist: 0.06,
+  lightShafts: 0,
   spray: { color: '#e7edc9', rate: 0.45, size: 0.8 },
   burst: { heavy: '#eef3da', soft: '#f2f7e2' },
 };
 
 const SNOWY: EnvironmentDefinition = {
   id: 'snowy-mountains',
+  // Phase 9B — alpine day, alpenglow sunset and a crisp starry night.
   stops: [
     {
       at: 0,
-      palette: { top: '#aecfe6', horizon: '#f6f0e4', far: '#c6d7e6', middle: '#d6e3ef', near: '#e3edf5', snow: '#f7fbfd', snowShade: '#c9d9e6', glow: '#fff0d2', moon: '#fff4df', night: 0.1 },
+      palette: { top: '#93b4d6', horizon: '#f2d8e2', far: '#c0d0e2', middle: '#d0ddec', near: '#dee9f2', snow: '#f4f8fc', snowShade: '#c6d6e4', glow: '#ffd9c4', moon: '#fff4df', night: 0.22 },
     },
     {
       at: 0.4,
       palette: { top: '#9cc6e4', horizon: '#f2f8fb', far: '#cfe0ee', middle: '#dde9f3', near: '#e9f1f8', snow: '#fbfdfe', snowShade: '#d3e2ed', glow: '#fff6da', moon: '#fff4df', night: 0 },
     },
     {
-      at: 0.75,
-      palette: { top: '#a3b8d8', horizon: '#f5dcd0', far: '#c3cfe0', middle: '#d2dcea', near: '#e0e8f1', snow: '#f4f4f6', snowShade: '#c5cddd', glow: '#ffd9b8', moon: '#fff4df', night: 0.16 },
+      at: 0.64,
+      palette: { top: '#8fa5cf', horizon: '#f7c9a8', far: '#bfc9de', middle: '#ccd8e6', near: '#dbe4ef', snow: '#f2eff0', snowShade: '#c5cddd', glow: '#ffcf9e', moon: '#fff0d8', night: 0.2 },
+    },
+    {
+      at: 0.82,
+      palette: { top: '#22335c', horizon: '#4c5a86', far: '#6d7fa4', middle: '#8b9cb8', near: '#a3b3ca', snow: '#ccd9ec', snowShade: '#9fb2ca', glow: '#b9c8e6', moon: '#f6f4ff', night: 0.6 },
+    },
+    {
+      at: 0.9,
+      palette: { top: '#14224a', horizon: '#333f66', far: '#5d709a', middle: '#7f92b2', near: '#98a9c4', snow: '#c2d2ea', snowShade: '#93a7c4', glow: '#adbfe4', moon: '#f2f0ff', night: 0.7 },
+    },
+    {
+      at: 0.965,
+      palette: { top: '#809ec1', horizon: '#d5c1cf', far: '#b1c2d7', middle: '#c4d2e3', near: '#d4dfeb', snow: '#edf2f9', snowShade: '#becfdf', glow: '#f3d5c9', moon: '#fff0d8', night: 0.29 },
     },
     {
       at: 1,
-      palette: { top: '#aecfe6', horizon: '#f6f0e4', far: '#c6d7e6', middle: '#d6e3ef', near: '#e3edf5', snow: '#f7fbfd', snowShade: '#c9d9e6', glow: '#fff0d2', moon: '#fff4df', night: 0.1 },
+      palette: { top: '#93b4d6', horizon: '#f2d8e2', far: '#c0d0e2', middle: '#d0ddec', near: '#dee9f2', snow: '#f4f8fc', snowShade: '#c6d6e4', glow: '#ffd9c4', moon: '#fff4df', night: 0.22 },
     },
   ],
   layers: [
@@ -401,9 +460,9 @@ const SNOWY: EnvironmentDefinition = {
   weather: [{ kind: 'snow', intensity: 0.55 }, { kind: 'wind', intensity: 0.3 }],
   clouds: { count: 6, opacity: 0.22, speed: 1.1, tint: '#ffffff' },
   sun: 0.9,
-  moon: 0.25,
-  stars: 18,
-  shootingStars: false,
+  moon: 0.85,
+  stars: 64,
+  shootingStars: true,
   flock: false,
   decorations: {
     entries: [{ kind: 'snowy-pine', weight: 16 }, { kind: 'snowy-bush', weight: 8 }, { kind: 'drift', weight: 13 }, { kind: 'stone', weight: 3 }],
@@ -411,24 +470,44 @@ const SNOWY: EnvironmentDefinition = {
   },
   decorationColors: { foliage: '#3f6f5a', foliageDark: '#2f5747', accent: '#f4f9fc', stone: '#8fa2b0' },
   ambient: null,
+  ground: { kind: 'snow', detail: 0.9, crest: '#ffffff', speckle: '#dcebf7' },
+  groundMist: 0.1,
+  lightShafts: 0,
   spray: { color: '#f4fbff', rate: 1, size: 1 },
   burst: { heavy: '#eaf6f8', soft: '#f4fbfc' },
 };
 
 const MISTY: EnvironmentDefinition = {
   id: 'misty-mountains',
+  // Phase 9B — soft veiled morning, hazy golden afternoon, moonlit mist at night.
   stops: [
     {
       at: 0,
-      palette: { top: '#a9bdc9', horizon: '#e9efe6', far: '#c6cfc9', middle: '#b6c3bb', near: '#a7b6aa', snow: '#c8d2c3', snowShade: '#9aac97', glow: '#f2efe0', moon: '#f6f4e8', night: 0.16 },
+      palette: { top: '#9fb3c2', horizon: '#e8ddda', far: '#c4ccc8', middle: '#b4c1ba', near: '#a5b4a8', snow: '#c6d0c1', snowShade: '#98a894', glow: '#f0e8d8', moon: '#f6f4e8', night: 0.2 },
     },
     {
       at: 0.5,
       palette: { top: '#b7c9d4', horizon: '#eef1ea', far: '#cdd5cd', middle: '#bdc9c1', near: '#aebcaa', snow: '#cdd7c9', snowShade: '#a0b09c', glow: '#f6f3e6', moon: '#f6f4e8', night: 0.1 },
     },
     {
+      at: 0.64,
+      palette: { top: '#a0aebd', horizon: '#e0cdb2', far: '#c2c8c2', middle: '#b2bfb6', near: '#a3b2a4', snow: '#c2ccc0', snowShade: '#94a48f', glow: '#e8d4ae', moon: '#f2f0e4', night: 0.22 },
+    },
+    {
+      at: 0.82,
+      palette: { top: '#35435e', horizon: '#5c6478', far: '#79848c', middle: '#8b968f', near: '#7c887e', snow: '#9fac9c', snowShade: '#6f7f6c', glow: '#b4bcc4', moon: '#eef2e8', night: 0.52 },
+    },
+    {
+      at: 0.9,
+      palette: { top: '#242f4a', horizon: '#414a60', far: '#6a747c', middle: '#7d8780', near: '#6e7a70', snow: '#909c8e', snowShade: '#64736a', glow: '#a8b0be', moon: '#eaeef0', night: 0.6 },
+    },
+    {
+      at: 0.965,
+      palette: { top: '#8d9fb0', horizon: '#cfc7c8', far: '#b6bfbd', middle: '#acb8b1', near: '#9daba0', snow: '#bec8b9', snowShade: '#90a08e', glow: '#ddd2c0', moon: '#f4f2e8', night: 0.26 },
+    },
+    {
       at: 1,
-      palette: { top: '#a9bdc9', horizon: '#e9efe6', far: '#c6cfc9', middle: '#b6c3bb', near: '#a7b6aa', snow: '#c8d2c3', snowShade: '#9aac97', glow: '#f2efe0', moon: '#f6f4e8', night: 0.16 },
+      palette: { top: '#9fb3c2', horizon: '#e8ddda', far: '#c4ccc8', middle: '#b4c1ba', near: '#a5b4a8', snow: '#c6d0c1', snowShade: '#98a894', glow: '#f0e8d8', moon: '#f6f4e8', night: 0.2 },
     },
   ],
   layers: [
@@ -442,8 +521,8 @@ const MISTY: EnvironmentDefinition = {
   weather: [{ kind: 'fog', intensity: 0.55 }, { kind: 'wind', intensity: 0.14 }],
   clouds: { count: 5, opacity: 0.12, speed: 0.6, tint: '#eef2ec' },
   sun: 0.45,
-  moon: 0,
-  stars: 0,
+  moon: 0.4,
+  stars: 14,
   shootingStars: false,
   flock: true,
   decorations: {
@@ -451,25 +530,48 @@ const MISTY: EnvironmentDefinition = {
     spacing: 98,
   },
   decorationColors: { foliage: '#6c8574', foliageDark: '#57705f', accent: '#cfd8c6', stone: '#8d9a92' },
-  ambient: null,
+  ambient: { count: 8, color: '#e8eee4', glow: 0, sizeMin: 1, sizeMax: 1.8, hoverMin: 10, hoverMax: 90, flickerMin: 0.08, flickerMax: 0.25, drift: 9 },
+  ground: { kind: 'rocky', detail: 0.8, crest: '#cfd8c6', speckle: '#6c7a70' },
+  groundMist: 0.42,
+  lightShafts: 0.22,
   spray: { color: '#e6eee7', rate: 0.55, size: 0.85 },
   burst: { heavy: '#e7eee9', soft: '#eff5ef' },
 };
 
 const MOONLIT: EnvironmentDefinition = {
   id: 'moonlit-forest',
+  // Phase 9B — the forest now follows the full day cycle: a moody blue-green
+  // daytime, violet dusk, its signature deep-indigo night (fireflies, moon
+  // and shooting stars) and a muted pre-dawn. Identity is carried by the
+  // blue-green hues and dense silhouettes, not by freezing the clock.
   stops: [
     {
       at: 0,
-      palette: { top: '#060a28', horizon: '#3a3572', far: '#1d2452', middle: '#181f45', near: '#131837', snow: '#c6cfee', snowShade: '#8d99c8', glow: '#b9c6f2', moon: '#f2f0ff', night: 0.94 },
+      palette: { top: '#46538c', horizon: '#8a6f96', far: '#46518a', middle: '#35406e', near: '#2a3454', snow: '#8b95b8', snowShade: '#5d6890', glow: '#cdb8d8', moon: '#f2f0ff', night: 0.5 },
     },
     {
-      at: 0.5,
-      palette: { top: '#0d1238', horizon: '#43407e', far: '#212853', middle: '#1b2248', near: '#161b3a', snow: '#ced8f2', snowShade: '#97a3d2', glow: '#c4cffe', moon: '#f6f4ff', night: 0.88 },
+      at: 0.38,
+      palette: { top: '#4f86a6', horizon: '#b8c9a2', far: '#4d7a72', middle: '#3c5e5a', near: '#2f4744', snow: '#6f9a8c', snowShade: '#4c7268', glow: '#d8e4c0', moon: '#fff6ec', night: 0.3 },
+    },
+    {
+      at: 0.64,
+      palette: { top: '#454a86', horizon: '#a2768e', far: '#3d4478', middle: '#2d3560', near: '#232a48', snow: '#8390b4', snowShade: '#56628c', glow: '#d0a2b0', moon: '#f4f2ff', night: 0.5 },
+    },
+    {
+      at: 0.82,
+      palette: { top: '#101640', horizon: '#45407e', far: '#232a58', middle: '#1b2248', near: '#151a3a', snow: '#b8c4e8', snowShade: '#8290c0', glow: '#c0ccf6', moon: '#f2f0ff', night: 0.82 },
+    },
+    {
+      at: 0.9,
+      palette: { top: '#060a28', horizon: '#3a3572', far: '#1d2452', middle: '#181f45', near: '#131837', snow: '#c6cfee', snowShade: '#8d99c8', glow: '#b9c6f2', moon: '#f2f0ff', night: 0.92 },
+    },
+    {
+      at: 0.965,
+      palette: { top: '#3c487d', horizon: '#7e6691', far: '#404a82', middle: '#313b68', near: '#273050', snow: '#949ec0', snowShade: '#646f98', glow: '#cabadc', moon: '#f2f0ff', night: 0.56 },
     },
     {
       at: 1,
-      palette: { top: '#060a28', horizon: '#3a3572', far: '#1d2452', middle: '#181f45', near: '#131837', snow: '#c6cfee', snowShade: '#8d99c8', glow: '#b9c6f2', moon: '#f2f0ff', night: 0.94 },
+      palette: { top: '#46538c', horizon: '#8a6f96', far: '#46518a', middle: '#35406e', near: '#2a3454', snow: '#8b95b8', snowShade: '#5d6890', glow: '#cdb8d8', moon: '#f2f0ff', night: 0.5 },
     },
   ],
   layers: [
@@ -482,7 +584,7 @@ const MOONLIT: EnvironmentDefinition = {
   fogVeil: [0.3, 0.18, 0.1, 0.05],
   weather: [{ kind: 'wind', intensity: 0.2 }, { kind: 'fog', intensity: 0.12 }],
   clouds: { count: 4, opacity: 0.14, speed: 0.8, tint: '#2a3155' },
-  sun: 0,
+  sun: 0.85,
   moon: 1,
   stars: 84,
   shootingStars: true,
@@ -492,7 +594,10 @@ const MOONLIT: EnvironmentDefinition = {
     spacing: 92,
   },
   decorationColors: { foliage: '#1b2440', foliageDark: '#141b31', accent: '#9fb4ff', stone: '#39415e' },
-  ambient: { count: 15, color: '#d8f2a0', glow: 9, sizeMin: 1.2, sizeMax: 2.4, hoverMin: 26, hoverMax: 130, flickerMin: 0.12, flickerMax: 0.95, drift: 15 },
+  ambient: { count: 15, color: '#d8f2a0', glow: 9, sizeMin: 1.2, sizeMax: 2.4, hoverMin: 26, hoverMax: 130, flickerMin: 0.12, flickerMax: 0.95, drift: 15, nightOnly: true },
+  ground: { kind: 'forest', detail: 0.9, crest: '#9aa8cc', speckle: '#2c3560' },
+  groundMist: 0.5,
+  lightShafts: 0.55,
   spray: { color: '#ccd8f7', rate: 0.6, size: 0.85 },
   burst: { heavy: '#dee6ff', soft: '#e6ecff' },
 };
@@ -557,6 +662,12 @@ export class EnvironmentManager {
   private time = 0;
   private shootingStar?: { start: number; x: number; y: number; direction: number };
   private morningFlock?: { start: number; y: number; count: number; direction: number };
+  /** Phase 9B dev preview override for weather; null restores level config. */
+  private weatherPreview: WeatherEffectConfig[] | null = null;
+
+  private readonly resolvedGround: GroundStyle = { kind: 'grass', detail: 1, crest: '#ffffff', speckle: '#ffffff' };
+  private resolvedGroundMist = 0;
+  private resolvedLightShafts = 0;
 
   constructor(options: { particleCap?: number } = {}) {
     this.weather = new WeatherSystem(options);
@@ -626,7 +737,8 @@ export class EnvironmentManager {
       wind: this.windValue,
       lighter: info.lighter,
     });
-    this.updateAmbient(delta, info);
+    const night = info.night ?? paletteFor(this.from.def, info.phase ?? 0).night;
+    this.updateAmbient(delta, info, night);
     this.from.field.maintain(info.cameraX, info.width);
     this.to?.field.maintain(info.cameraX, info.width);
   }
@@ -637,9 +749,19 @@ export class EnvironmentManager {
     return clamp01(this.weather.wind * (0.35 + 0.65 * clamp01(gust)) + storm * 0.55);
   }
 
-  private updateAmbient(delta: number, info: EnvironmentUpdateInfo): void {
+  private updateAmbient(delta: number, info: EnvironmentUpdateInfo, night: number): void {
     const style = this.resolvedAmbient;
     if (style.count <= 0) {
+      this.ambientActive = 0;
+      return;
+    }
+    // Phase 9B — fireflies wait for night, pollen fades with it. Counts are
+    // shaped (never the pool) so particles are reused, not reallocated.
+    let visible = style.count;
+    if (style.nightOnly) visible *= smoothstep(clamp01((night - 0.42) / 0.34));
+    else if (style.dayOnly) visible *= 1 - 0.8 * smoothstep(clamp01((night - 0.34) / 0.36));
+    const target = Math.min(Math.round(visible), AMBIENT_CAP);
+    if (target <= 0) {
       this.ambientActive = 0;
       return;
     }
@@ -652,7 +774,7 @@ export class EnvironmentManager {
         size: lerp(style.sizeMin, style.sizeMax, Math.random()),
       });
     }
-    this.ambientActive = Math.min(style.count, this.ambientPool.length);
+    this.ambientActive = Math.min(target, this.ambientPool.length);
     const left = info.cameraX - 90;
     const right = info.cameraX + info.width + 90;
     for (let index = 0; index < this.ambientActive; index += 1) {
@@ -712,10 +834,12 @@ export class EnvironmentManager {
     const kinds = new Set<WeatherKind>([...fromWeather, ...(toWeather ?? [])].map((effect) => effect.kind));
     const intensityOf = (list: WeatherEffectConfig[], kind: WeatherKind) =>
       list.filter((effect) => effect.kind === kind).reduce((max, effect) => Math.max(max, effect.intensity), 0);
-    this.resolvedWeather = [...kinds].map((kind) => ({
-      kind,
-      intensity: lerp(intensityOf(fromWeather, kind), toWeather ? intensityOf(toWeather, kind) : intensityOf(fromWeather, kind), t),
-    }));
+    this.resolvedWeather = this.weatherPreview
+      ? this.weatherPreview.map((effect) => ({ ...effect }))
+      : [...kinds].map((kind) => ({
+        kind,
+        intensity: lerp(intensityOf(fromWeather, kind), toWeather ? intensityOf(toWeather, kind) : intensityOf(fromWeather, kind), t),
+      }));
 
     const fromAmbient = fromDef.ambient ?? EMPTY_AMBIENT;
     const toAmbient = toDef?.ambient ?? fromAmbient;
@@ -730,7 +854,18 @@ export class EnvironmentManager {
       flickerMin: number(fromAmbient.flickerMin, toAmbient.flickerMin),
       flickerMax: number(fromAmbient.flickerMax, toAmbient.flickerMax),
       drift: number(fromAmbient.drift, toAmbient.drift),
+      nightOnly: t >= 0.5 ? toAmbient.nightOnly : fromAmbient.nightOnly,
+      dayOnly: t >= 0.5 ? toAmbient.dayOnly : fromAmbient.dayOnly,
     };
+
+    const fromGround = fromDef.ground;
+    const toGround = toDef?.ground ?? fromGround;
+    this.resolvedGround.kind = t >= 0.5 ? toGround.kind : fromGround.kind;
+    this.resolvedGround.detail = number(fromGround.detail, toGround.detail);
+    this.resolvedGround.crest = color(fromGround.crest, toGround.crest);
+    this.resolvedGround.speckle = color(fromGround.speckle, toGround.speckle);
+    this.resolvedGroundMist = number(fromDef.groundMist, toDef?.groundMist ?? fromDef.groundMist);
+    this.resolvedLightShafts = number(fromDef.lightShafts, toDef?.lightShafts ?? fromDef.lightShafts);
 
     this.resolvedColors = {
       fog: color(fromDef.fogColor, toDef?.fogColor ?? fromDef.fogColor),
@@ -777,6 +912,26 @@ export class EnvironmentManager {
 
   get windStrength(): number {
     return this.windValue;
+  }
+
+  /** Phase 9B — resolved cosmetic ground style (never affects collision). */
+  get groundStyle(): GroundStyle {
+    return this.resolvedGround;
+  }
+
+  /** Phase 9B — number of ambient particles currently visible (fireflies…). */
+  get activeAmbientParticles(): number {
+    return this.ambientActive;
+  }
+
+  /**
+   * Phase 9B dev preview — pins the weather to a fixed effect list so every
+   * condition can be audited regardless of level config. `null` restores the
+   * level's configured weather (including any in-flight transition blend).
+   */
+  setWeatherPreview(effects: readonly WeatherEffectConfig[] | null): void {
+    this.weatherPreview = effects ? effects.map((effect) => ({ ...effect })) : null;
+    this.resolve();
   }
 
   palette(phase: number): Palette {
@@ -971,7 +1126,37 @@ export class EnvironmentManager {
       if (veil > 0.02) this.drawFogBand(context, view, index, veil);
     }
     this.drawClouds(context, view, palette);
+    if (this.resolvedLightShafts > 0.02 && !view.lighter) this.drawLightShafts(context, view, palette);
     if (this.weather.fog > 0.03) this.drawHorizonHaze(context, view);
+  }
+
+  /**
+   * Phase 9B — soft light filtering between trees: a few slow-drifting
+   * translucent beams. Sun-driven by day, moon-lit at night; disabled on the
+   * lighter graphics tier.
+   */
+  private drawLightShafts(context: CanvasRenderingContext2D, view: EnvironmentView, palette: Palette): void {
+    const lit = Math.max((1 - palette.night) * this.resolvedLight.sun, palette.night * this.resolvedLight.moon * 0.6);
+    const strength = this.resolvedLightShafts * lit;
+    if (strength <= 0.02) return;
+    const { width, height, clock } = view;
+    context.save();
+    for (let index = 0; index < 3; index += 1) {
+      const anchor = 0.16 + index * 0.27 + Math.sin(clock * 0.045 + index * 2.1) * 0.05;
+      const beamWidth = width * (0.05 + hash(index * 9.13 + 5) * 0.05);
+      const alpha = strength * (0.05 + hash(index * 3.7 + 11) * 0.05);
+      const gradient = context.createLinearGradient(0, 0, 0, height * 0.72);
+      gradient.addColorStop(0, alphaColor(palette.glow, alpha));
+      gradient.addColorStop(0.65, alphaColor(palette.glow, alpha * 0.45));
+      gradient.addColorStop(1, alphaColor(palette.glow, 0));
+      context.save();
+      context.translate(width * anchor, 0);
+      context.rotate(0.14 + index * 0.05);
+      context.fillStyle = gradient;
+      context.fillRect(-beamWidth * 0.5, -height * 0.1, beamWidth, height * 0.85);
+      context.restore();
+    }
+    context.restore();
   }
 
   private drawParallaxLayer(
@@ -1114,8 +1299,9 @@ export class EnvironmentManager {
     if (count <= 0 || opacity <= 0.01) return;
     const { width, height, clock, cameraX } = view;
     context.save();
-    context.fillStyle = mixColor(tint, palette.glow, 0.32);
-    context.globalAlpha = opacity;
+    // Phase 9B — clouds shade with the day cycle instead of staying bright.
+    context.fillStyle = mixColor(mixColor(tint, palette.glow, 0.32), palette.top, palette.night * 0.5);
+    context.globalAlpha = opacity * (1 - palette.night * 0.35);
     for (let index = 0; index < count; index += 1) {
       const span = width + 280;
       const drift = clock * (7 + (index % 3) * 3) * speed * (1 + this.windValue * 1.4) + cameraX * 0.035;
@@ -1142,10 +1328,11 @@ export class EnvironmentManager {
     context: CanvasRenderingContext2D,
     view: EnvironmentView,
     reserved: (x: number, halfWidth: number) => boolean,
+    palette: Palette,
   ): void {
     const fromAlpha = this.to ? 1 - this.blend : 1;
-    this.drawDecorationField(context, view, this.from.field, fromAlpha, reserved);
-    if (this.to) this.drawDecorationField(context, view, this.to.field, this.blend, reserved);
+    this.drawDecorationField(context, view, this.from.field, fromAlpha, reserved, palette);
+    if (this.to) this.drawDecorationField(context, view, this.to.field, this.blend, reserved, palette);
   }
 
   private drawDecorationField(
@@ -1154,8 +1341,19 @@ export class EnvironmentManager {
     field: DecorationField,
     alpha: number,
     reserved: (x: number, halfWidth: number) => boolean,
+    palette: Palette,
   ): void {
     if (alpha <= 0.01) return;
+    // Phase 9B — vegetation now shades with the day cycle (accents keep their
+    // luminescence so glow-shrooms and flowers still read at night).
+    const base = this.resolvedColors;
+    const shade = palette.night * 0.5;
+    const colors = {
+      foliage: mixColor(base.foliage, palette.near, shade),
+      foliageDark: mixColor(base.foliageDark, palette.near, shade),
+      accent: base.accent,
+      stone: mixColor(base.stone, palette.near, shade),
+    };
     field.forEachVisible(view.cameraX, view.width, (decoration) => {
       const halfWidth = DECORATION_HALF_WIDTH[decoration.kind] * decoration.scale;
       if (reserved(decoration.x, halfWidth)) return;
@@ -1168,13 +1366,18 @@ export class EnvironmentManager {
       context.rotate(sway * 0.35);
       context.scale(decoration.scale * (decoration.flip ? -1 : 1), decoration.scale);
       context.globalAlpha = alpha;
-      this.drawDecorationArt(context, decoration, sway, view);
+      this.drawDecorationArt(context, decoration, sway, view, colors);
       context.restore();
     });
   }
 
-  private drawDecorationArt(context: CanvasRenderingContext2D, decoration: Decoration, sway: number, view: EnvironmentView): void {
-    const colors = this.resolvedColors;
+  private drawDecorationArt(
+    context: CanvasRenderingContext2D,
+    decoration: Decoration,
+    sway: number,
+    view: EnvironmentView,
+    colors: { foliage: string; foliageDark: string; accent: string; stone: string },
+  ): void {
     switch (decoration.kind) {
       case 'grass': {
         context.strokeStyle = colors.foliageDark;
@@ -1359,6 +1562,192 @@ export class EnvironmentManager {
     }
   }
 
+  // ───────────────────────── ground detail (Phase 9B) ─────────────────────────
+
+  /**
+   * Phase 9B — environment-specific ground appearance drawn *along the exact
+   * collision surface* the engine samples (`view.groundAt`): grass blades,
+   * snow sparkles, rocky pebbles and cracks, forest roots and leaf litter.
+   * Purely cosmetic — wheels stay on the untouched physics surface.
+   */
+  drawGroundDetail(context: CanvasRenderingContext2D, view: EnvironmentView, palette: Palette): void {
+    if (typeof view.groundAt !== 'function') return;
+    const style = this.resolvedGround;
+    const density = style.detail * (view.lighter ? 0.45 : 1);
+    if (density <= 0.05) return;
+    const { width, cameraX, clock } = view;
+    const crest = mixColor(style.crest, palette.top, palette.night * 0.45);
+    const speckle = mixColor(style.speckle, palette.top, palette.night * 0.5);
+    const step = view.lighter ? 18 : 12;
+    const first = Math.floor((cameraX - 24) / step);
+    const last = Math.ceil((cameraX + width + 24) / step);
+    const sway = Math.sin(clock * 1.8) * (1.5 + this.windValue * 3.5);
+
+    context.save();
+    context.lineCap = 'round';
+    for (let index = first; index <= last; index += 1) {
+      const roll = hash(index * 12.9898 + 78.233);
+      if (roll > density) continue;
+      const worldX = index * step;
+      const x = worldX - cameraX;
+      const y = view.groundAt(worldX);
+      const jitter = (hash(index * 4.113 + 9.7) - 0.5) * step * 0.9;
+      const roll2 = hash(index * 7.91 + 31.7);
+      switch (style.kind) {
+        case 'grass': {
+          const height = 4 + roll2 * 6;
+          context.strokeStyle = roll2 > 0.72 ? crest : speckle;
+          context.lineWidth = 1.4;
+          context.beginPath();
+          context.moveTo(x, y + 1);
+          context.quadraticCurveTo(x + jitter * 0.4, y - height * 0.55, x + jitter + sway, y - height);
+          context.stroke();
+          break;
+        }
+        case 'snow': {
+          if (roll2 < 0.16) {
+            // Wind-smoothed streak just under the crest.
+            context.strokeStyle = alphaColor(speckle, 0.5 - palette.night * 0.2);
+            context.lineWidth = 1;
+            context.beginPath();
+            context.moveTo(x - 5, y + 3 + jitter * 0.2);
+            context.quadraticCurveTo(x, y + 1.5, x + 6, y + 3);
+            context.stroke();
+          } else {
+            // Glinting sparkle.
+            context.fillStyle = alphaColor(crest, 0.55 - palette.night * 0.25);
+            context.fillRect(x + jitter * 0.5, y - 1 - roll2 * 3, 1.6, 1.6);
+          }
+          break;
+        }
+        case 'rocky': {
+          if (roll2 < 0.22) {
+            // A hairline crack running down from the crest.
+            context.strokeStyle = alphaColor(speckle, 0.55);
+            context.lineWidth = 1;
+            context.beginPath();
+            context.moveTo(x, y);
+            context.lineTo(x + jitter * 0.5 + 2, y + 5 + roll2 * 9);
+            context.lineTo(x + jitter * 0.5 + 1, y + 9 + roll2 * 12);
+            context.stroke();
+          } else {
+            // Pebble resting on the surface.
+            context.fillStyle = alphaColor(speckle, 0.75);
+            context.beginPath();
+            context.ellipse(x + jitter * 0.4, y - 0.5, 1.8 + roll2 * 1.6, 1.2 + roll2, 0, 0, TAU);
+            context.fill();
+          }
+          break;
+        }
+        case 'forest': {
+          if (roll2 < 0.4) {
+            // Root crossing the crest.
+            context.strokeStyle = alphaColor(speckle, 0.7);
+            context.lineWidth = 1.6;
+            context.beginPath();
+            context.moveTo(x - 6, y + 2);
+            context.quadraticCurveTo(x + jitter * 0.5, y - 3, x + 6, y + 2.5);
+            context.stroke();
+          } else {
+            // Leaf litter scattered just below the crest.
+            context.fillStyle = alphaColor(roll2 > 0.7 ? crest : speckle, 0.6);
+            context.fillRect(x + jitter * 0.5, y + 2 + roll2 * 4, 1.8, 1.4);
+            context.fillRect(x + jitter * 0.5 + 3, y + 3.5 + roll2 * 3, 1.4, 1.2);
+          }
+          break;
+        }
+      }
+    }
+    context.restore();
+  }
+
+  // ───────────────────────── foreground silhouettes (Phase 9B) ─────────────────────────
+
+  /**
+   * Phase 9B — sparse near-camera silhouettes that sweep past *in front* of
+   * the gameplay: the closest rung of the parallax ladder. Hash-seeded (no
+   * state, fully deterministic), culled to the visible span, alpha-kept low
+   * so obstacles and the rider stay perfectly readable.
+   */
+  drawForeground(context: CanvasRenderingContext2D, view: EnvironmentView, palette: Palette): void {
+    const cell = 620;
+    const parallax = 1.18;
+    const offset = view.cameraX * parallax;
+    const first = Math.floor((offset - 140) / cell);
+    const last = Math.ceil((offset + view.width + 140) / cell);
+    if (first > last) return;
+    const tint = mixColor(this.resolvedGround.speckle, palette.top, 0.35 + palette.night * 0.25);
+    const alpha = 0.34 - palette.night * 0.08;
+    const sway = Math.sin(view.clock * 1.2) * (2 + this.windValue * 4);
+
+    context.save();
+    for (let index = first; index <= last; index += 1) {
+      const roll = hash(index * 4.517 + 17.29);
+      if (roll > 0.5) continue;
+      const x = index * cell + hash(index * 7.73 + 3.1) * cell * 0.72 - offset;
+      const size = 0.7 + hash(index * 9.31 + 44.9) * 0.6;
+      context.save();
+      context.translate(x, view.height + 2);
+      context.rotate((hash(index * 3.3 + 8) - 0.5) * 0.06);
+      context.scale(size, size);
+      context.globalAlpha = alpha;
+      context.fillStyle = tint;
+      context.strokeStyle = tint;
+      switch (this.resolvedGround.kind) {
+        case 'grass': {
+          // Tall grass tuft leaning into the wind.
+          context.lineWidth = 2.4;
+          for (let blade = 0; blade < 4; blade += 1) {
+            const lean = sway + (blade - 1.5) * 7;
+            context.beginPath();
+            context.moveTo(blade * 5 - 8, 0);
+            context.quadraticCurveTo(blade * 5 - 8 + lean * 0.4, -46, blade * 5 - 8 + lean, -88 - blade * 7);
+            context.stroke();
+          }
+          break;
+        }
+        case 'snow': {
+          // Wind-sculpted snow lump.
+          context.beginPath();
+          context.moveTo(-70, 0);
+          context.quadraticCurveTo(-30, -34, 12, -20);
+          context.quadraticCurveTo(52, -8, 74, 0);
+          context.closePath();
+          context.fill();
+          break;
+        }
+        case 'rocky': {
+          // Reeds swaying over a stone.
+          context.lineWidth = 2;
+          for (let reed = 0; reed < 3; reed += 1) {
+            const lean = sway * 1.4 + (reed - 1) * 6;
+            context.beginPath();
+            context.moveTo(reed * 9 - 9, 0);
+            context.quadraticCurveTo(reed * 9 - 9 + lean * 0.3, -44, reed * 9 - 9 + lean, -74 - reed * 9);
+            context.stroke();
+          }
+          context.beginPath();
+          context.ellipse(4, -4, 26, 12, 0, Math.PI, TAU);
+          context.fill();
+          break;
+        }
+        case 'forest': {
+          // Dark trunk with a low branch.
+          context.fillRect(-9, -120, 18, 122);
+          context.lineWidth = 10;
+          context.lineCap = 'round';
+          context.beginPath();
+          context.moveTo(-2, -78);
+          context.quadraticCurveTo(34, -66, 52 + sway, -34);
+          context.stroke();
+          break;
+        }
+      }
+      context.restore();
+    }
+    context.restore();
+  }
+
   // ───────────────────────── ambient particles ─────────────────────────
 
   drawAmbient(context: CanvasRenderingContext2D, view: EnvironmentView): void {
@@ -1387,12 +1776,60 @@ export class EnvironmentManager {
   drawWeather(context: CanvasRenderingContext2D, view: EnvironmentView, palette: Palette): void {
     this.weather.drawSnow(context, palette.night);
     this.weather.drawRain(context, this.windValue);
+    if (this.resolvedGroundMist > 0.03 && typeof view.groundAt === 'function') this.drawGroundMist(context, view, palette);
     if (this.weather.fog > 0.02) {
       // A faint, uniform haze. It is deliberately subtle so nearby obstacles
       // stay clearly readable — heavy veiling happens behind the terrain only.
       context.fillStyle = alphaColor(this.resolvedColors.fog, this.weather.fog * 0.09);
       context.fillRect(0, 0, view.width, view.height);
     }
+  }
+
+  /**
+   * Phase 9B — ground-level mist hugging the terrain crest: one soft band
+   * following the surface plus two slow drifting pockets. Slightly thinner
+   * at night so wheels and obstacles remain readable.
+   */
+  private drawGroundMist(context: CanvasRenderingContext2D, view: EnvironmentView, palette: Palette): void {
+    const { width, height, clock, cameraX } = view;
+    const strength = this.resolvedGroundMist * (1 - palette.night * 0.22);
+    const color = mixColor(this.resolvedColors.fog, palette.horizon, 0.35);
+    const step = 64;
+    const samples = Math.ceil(width / step) + 2;
+    const crestAt = (screenX: number) => view.groundAt(cameraX + screenX)
+      + Math.sin(clock * 0.45 + (cameraX + screenX) * 0.004) * 5;
+
+    context.save();
+    context.beginPath();
+    context.moveTo(-step, height + 40);
+    for (let index = 0; index <= samples; index += 1) {
+      const screenX = -step + index * step;
+      context.lineTo(screenX, crestAt(screenX) - 24);
+    }
+    for (let index = samples; index >= 0; index -= 1) {
+      const screenX = -step + index * step;
+      context.lineTo(screenX, crestAt(screenX) + 30);
+    }
+    context.closePath();
+    const gradient = context.createLinearGradient(0, height * 0.45, 0, height);
+    gradient.addColorStop(0, alphaColor(color, 0));
+    gradient.addColorStop(0.55, alphaColor(color, strength * 0.34));
+    gradient.addColorStop(1, alphaColor(color, strength * 0.12));
+    context.fillStyle = gradient;
+    context.fill();
+
+    // Two pockets of mist drifting along the valley floor.
+    context.fillStyle = alphaColor(color, strength * 0.16);
+    for (let index = 0; index < 2; index += 1) {
+      const span = width * 1.7;
+      const drift = (clock * (10 + index * 6) * (1 + this.windValue) + hash(index * 11.3 + 7) * 5000) % span;
+      const x = ((drift % span) + span) % span - width * 0.35;
+      const y = crestAt(x) + 6;
+      context.beginPath();
+      context.ellipse(x, y, width * 0.3, 16 + index * 7, 0, 0, TAU);
+      context.fill();
+    }
+    context.restore();
   }
 }
 

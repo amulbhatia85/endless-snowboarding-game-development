@@ -155,6 +155,23 @@ const DEV_LEVELS: { level: number; label: string }[] = [
   { level: 3, label: 'Misty Mountains' },
   { level: 4, label: 'Moonlit Forest' },
 ];
+// Phase 9B audit tools: pin the weather and freeze the day cycle so every
+// condition can be previewed in each of the four environments.
+const DEV_WEATHER: { id: string; label: string }[] = [
+  { id: 'auto', label: 'Weather…' },
+  { id: 'clear', label: 'Clear' },
+  { id: 'snow', label: 'Snow' },
+  { id: 'fog', label: 'Fog' },
+  { id: 'wind', label: 'Wind' },
+  { id: 'storm', label: 'Storm' },
+];
+const DEV_PHASES: { id: string; label: string }[] = [
+  { id: 'auto', label: 'Time…' },
+  { id: '0.06', label: 'Dawn' },
+  { id: '0.4', label: 'Day' },
+  { id: '0.66', label: 'Sunset' },
+  { id: '0.9', label: 'Night' },
+];
 // Phase 9A audit tool: per-obstacle preview ids (validated placements only).
 const DEV_OBSTACLES: { id: string; label: string }[] = [
   { id: 'rock', label: 'Rock' },
@@ -199,6 +216,8 @@ export default function App() {
   const [splashDone, setSplashDone] = useState(false);
   const [hasParkedRun, setHasParkedRun] = useState(false);
   const [obstaclePreview, setObstaclePreview] = useState('');
+  const [weatherPreview, setWeatherPreview] = useState('auto');
+  const [dayPreview, setDayPreview] = useState('auto');
   const [rewardedReady, setRewardedReady] = useState(false);
   const [adBusy, setAdBusy] = useState(false);
   const [adNotice, setAdNotice] = useState('');
@@ -676,6 +695,25 @@ export default function App() {
     if (!engine.startObstaclePreview(id || null)) setObstaclePreview('');
   };
 
+  // Phase 9B dev tools: pin the weather and freeze the time of day. Both are
+  // purely cosmetic overrides — generation, physics and progression are
+  // untouched, and 'auto' restores the live configuration.
+  const previewWeather = (id: string) => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    audio.click();
+    setWeatherPreview(id);
+    engine.setWeatherPreview(id as 'auto' | 'clear' | 'snow' | 'fog' | 'wind' | 'storm');
+  };
+
+  const previewDayPhase = (id: string) => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    audio.click();
+    setDayPreview(id);
+    engine.setDayPhasePreview(id === 'auto' ? null : Number(id));
+  };
+
   const togglePause = () => engineRef.current?.togglePause();
 
   const continueParkedRun = () => {
@@ -869,6 +907,26 @@ export default function App() {
           >
             <option value="">Obstacle mix…</option>
             {DEV_OBSTACLES.map(({ id, label }) => (
+              <option key={id} value={id}>{label}</option>
+            ))}
+          </select>
+          <select
+            className="dev-level-button dev-obstacle-select"
+            aria-label="Developer weather preview (cosmetic override)"
+            value={weatherPreview}
+            onChange={(event) => previewWeather(event.target.value)}
+          >
+            {DEV_WEATHER.map(({ id, label }) => (
+              <option key={id} value={id}>{label}</option>
+            ))}
+          </select>
+          <select
+            className="dev-level-button dev-obstacle-select"
+            aria-label="Developer time-of-day preview (freezes the day cycle)"
+            value={dayPreview}
+            onChange={(event) => previewDayPhase(event.target.value)}
+          >
+            {DEV_PHASES.map(({ id, label }) => (
               <option key={id} value={id}>{label}</option>
             ))}
           </select>

@@ -26,6 +26,20 @@ function channels(color) {
   return match.slice(0, 3).map(Number);
 }
 
+/** Parses both `rgb()` strings and `#rrggbb` stop values. */
+function channelsAny(color) {
+  if (color.startsWith('#')) {
+    return [1, 3, 5].map((index) => Number.parseInt(color.slice(index, index + 2), 16));
+  }
+  return channels(color);
+}
+
+function channelDistanceAny(a, b) {
+  const first = channelsAny(a);
+  const second = channelsAny(b);
+  return Math.max(...first.map((value, index) => Math.abs(value - second[index])));
+}
+
 function channelDistance(a, b) {
   const first = channels(a);
   const second = channels(b);
@@ -186,17 +200,34 @@ test('Environment palettes carry each theme identity and wrap continuously at th
   assert.ok(misty.night < 0.3, 'misty mountains stay a soft morning scene');
 
   environment.setLevel(generateLevel(4, 42));
-  const moonlit = environment.palette(0.4);
-  assert.ok(moonlit.night > 0.8, 'moonlit forest is a night scene');
-  assert.ok(channels(moonlit.snow)[2] > channels(moonlit.snow)[0], 'moonlit ground leans blue');
+  const moonlitDay = environment.palette(0.4);
+  assert.ok(moonlitDay.night <= 0.45, 'moonlit forest now rides the day cycle instead of frozen night');
+  assert.ok(channels(moonlitDay.snow)[2] > channels(moonlitDay.snow)[0], 'moonlit ground leans blue');
+  const moonlitNight = environment.palette(0.9);
+  assert.ok(moonlitNight.night > 0.8, 'moonlit forest keeps its signature deep night');
 
-  // Phase wraps must not jump: stops at 0 and 1 carry identical values.
+  // Phase wraps must not jump: stops at 0 and 1 carry identical values, and no
+  // stop-to-stop segment is steep enough to read as a flash transition.
   for (const number of [1, 2, 3, 4]) {
     environment.setLevel(generateLevel(number, 42));
+    const stops = ENVIRONMENTS[environment.theme].stops;
+    assert.equal(stops[stops.length - 1].at, 1, 'the cycle closes at phase 1');
+    for (const key of COLOR_KEYS) {
+      assert.equal(channelDistanceAny(stops[0].palette[key], stops[stops.length - 1].palette[key]), 0, `${key} wraps at the seam`);
+    }
+    assert.equal(stops[0].palette.night, stops[stops.length - 1].palette.night, 'night wraps at the seam');
+    for (let index = 0; index < stops.length - 1; index += 1) {
+      const span = stops[index + 1].at - stops[index].at;
+      assert.ok(span >= 0.03, 'stops are spaced far enough apart to animate');
+      for (const key of COLOR_KEYS) {
+        assert.ok(channelDistanceAny(stops[index].palette[key], stops[index + 1].palette[key]) / span <= 2600, `${key} segment is not a flash`);
+      }
+      assert.ok(Math.abs(stops[index + 1].palette.night - stops[index].palette.night) / span <= 8, 'night segment is not a flash');
+    }
     const opening = environment.palette(0.002);
     const closing = environment.palette(0.998);
-    for (const key of COLOR_KEYS) assert.ok(channelDistance(opening[key], closing[key]) <= 2, `${key} jumps at the phase seam`);
-    assert.ok(Math.abs(opening.night - closing.night) <= 0.02);
+    for (const key of COLOR_KEYS) assert.ok(channelDistance(opening[key], closing[key]) <= 8, `${key} jumps at the phase seam`);
+    assert.ok(Math.abs(opening.night - closing.night) <= 0.12);
   }
 });
 
