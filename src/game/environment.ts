@@ -1224,6 +1224,11 @@ export class EnvironmentManager {
     const seed = 4 + layerIndex * 15;
 
     let fill = mixColor(layer.color, palette.top, palette.night * 0.3);
+    // Phase 10A — aerial perspective: the farthest ridges haze toward the
+    // horizon tone even under clear skies, so the near terrain separates
+    // crisply from the distance (depth without new draw passes).
+    const aerial = Math.max(0, 0.38 - layer.parallax) * 0.5;
+    fill = mixColor(fill, palette.horizon, aerial);
     fill = mixColor(fill, this.resolvedColors.fog, this.resolvedVeil[layerIndex] * this.weather.fog);
 
     context.beginPath();

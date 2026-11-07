@@ -281,6 +281,15 @@ const WHEEL_Y = -8;
 const REAR_AXLE = -25;
 const FRONT_AXLE = 25;
 const WHEEL_CONTACT_Y = 5;
+/** Phase 10A — hoisted so the render/loop paths allocate no per-frame arrays. */
+const WHEEL_AXLES: readonly number[] = [REAR_AXLE, FRONT_AXLE];
+/**
+ * Phase 10A — canvas text now speaks the same typography as the DOM shell
+ * ("Avenir Next", Avenir, "Segoe UI") so popups, warnings and icons never
+ * clash with the surrounding interface.
+ */
+const CANVAS_FONT_STACK = '"Avenir Next", Avenir, "Segoe UI", sans-serif';
+const canvasFont = (weight: number, size: number) => `${weight} ${size}px ${CANVAS_FONT_STACK}`;
 const FLIP_HOLD_SECONDS = BICYCLE_PHYSICS.flipHoldSeconds;
 const START_PAUSE = 1;
 const START_ROLLOUT = 2.2;
@@ -553,6 +562,9 @@ export class SnowGameEngine {
   start(): void {
     this.levels.restartAttempt();
     this.obstacleRejections = [];
+    // Phase 10A — every fresh run begins with a relaxed suspension.
+    this.suspension = 0;
+    this.suspensionVelocity = 0;
     const level = this.levels.current;
     this.environment.setLevel(level);
     const x = 0;
@@ -961,6 +973,10 @@ export class SnowGameEngine {
     rider.grounded = true;
     rider.airTime = 0;
     rider.fallingInto = undefined;
+    // Phase 10A — revival starts with a relaxed suspension, not whatever
+    // compression the crash left behind.
+    this.suspension = 0;
+    this.suspensionVelocity = 0;
     run.distance = rider.x;
     run.over = false;
     run.crashReaction = undefined;
@@ -1077,6 +1093,14 @@ export class SnowGameEngine {
   };
 
   private lastNight = 0;
+  /**
+   * Phase 10A — visual-only suspension spring. `land()` compresses it by the
+   * touchdown impact, `updateEffects()` integrates a slightly underdamped
+   * spring, and the rider draw sinks the chassis (never the wheels) into it.
+   * It feeds nothing back into physics, collision or scoring.
+   */
+  private suspension = 0;
+  private suspensionVelocity = 0;
   /** Phase 9B dev previews — fixed day phase / storm strength (null = live). */
   private dayPhasePreview?: number;
   private devStorm = 0;
@@ -1351,6 +1375,8 @@ export class SnowGameEngine {
     rider.totalSpin = 0;
     rider.flipElapsed = undefined;
     rider.angularVelocity = 0;
+    // Phase 10A — the forks extend slightly as the wheels leave the ground.
+    this.suspensionVelocity -= 1.4;
     run.shake = Math.max(run.shake, 1.6);
     this.burst(run, rider.x - 8, rider.y + 2, 9, this.environment.burstColors.soft, 95, -65);
     this.emit({ type: 'jump' });
@@ -1591,6 +1617,10 @@ export class SnowGameEngine {
         // one-time rewards and bank the level's collected glowstones before
         // the completion card is shown.
         this.settleLevelRewards(run);
+        // Phase 10A — warm sparks rise from the roofline as the level
+        // completes inside (draw-time particles only).
+        this.burst(run, house.x + 14, house.groundY - 118, 24, '#ffd98b', 72, -78);
+        this.burst(run, house.x - 4, house.groundY - 132, 12, '#fff1cd', 52, -60);
         run.levelPhase = 'celebrating';
         run.sceneTime = 0;
         // Cross-fade the whole environment while the rider is inside the
@@ -1688,13 +1718,19 @@ export class SnowGameEngine {
 
     this.emit({ type: 'land', force: clamp(rider.vy / 950, 0, 1), clean: angleError < 0.35 });
 
+    // Phase 10A — compress the visual suspension by the touchdown impact
+    // (draw-time only; the physics below is untouched).
+    const impact = clamp(rider.vy / 950, 0, 1);
+    this.suspensionVelocity += impact * 5.4;
+
     rider.grounded = true;
     rider.vy = 0;
     rider.y = groundY;
     rider.rotation = angle;
     rider.angularVelocity = 0;
     run.shake = Math.max(run.shake, angleError > 0.55 ? 4.2 : 2.4);
-    this.burst(run, rider.x, groundY + 2, angleError > 0.55 ? 16 : 10, this.environment.burstColors.soft, 135, -90);
+    this.burst(run, rider.x, groundY + 2, (angleError > 0.55 ? 16 : 10) + Math.round(impact * 9),
+      this.environment.burstColors.soft, 135 + impact * 60, -90 - impact * 25);
 
     if (flips > 0) {
       if (run.elapsed - run.lastTrickAt < 5.5) run.combo += 1;
@@ -1750,6 +1786,8 @@ export class SnowGameEngine {
         run.bonus += 125 * amount;
         run.shake = Math.max(run.shake, 1.3);
         this.burst(run, x, y, 9, '#ffd98b', 115, -40);
+        // Phase 10A — a short bright core sparkle makes the pickup pop.
+        this.burst(run, x, y - 2, 4, '#fff6dc', 58, -26);
         this.popup(run, x, y - 12, amount === 2 ? '2× GLOWSTONES' : '+125', '#ffe0a2');
       }
       this.emit({ type: 'coin' });
@@ -1939,7 +1977,7 @@ export class SnowGameEngine {
     const sin = Math.sin(rider.rotation);
 
     for (let index = 0; index < bursts; index += 1) {
-      for (const axle of [REAR_AXLE, FRONT_AXLE]) {
+      for (const axle of WHEEL_AXLES) {
         // Snow leaves the lower rear quadrant along the tire's tangent.
         const angle = 0.2 + Math.random() * 0.5;
         const localX = (axle - WHEEL_RADIUS * Math.sin(angle)) * BIKE_SCALE;
@@ -1964,6 +2002,13 @@ export class SnowGameEngine {
   }
 
   private updateEffects(run: RunState, delta: number): void {
+    // Phase 10A — slightly underdamped suspension spring: compress on
+    // landing, rebound once, settle. Pure draw state.
+    if (delta > 0) {
+      const spring = -this.suspension * 90 - this.suspensionVelocity * 11;
+      this.suspensionVelocity += spring * delta;
+      this.suspension = clamp(this.suspension + this.suspensionVelocity * delta, -0.18, 1);
+    }
     // Phase 8 — the crash tumble plays out while the crashed scene is on
     // screen (the frame loop keeps calling this for paused/crashed/gameover).
     const reaction = run.crashReaction;
@@ -2100,8 +2145,40 @@ export class SnowGameEngine {
     context.restore();
     // Screen-space weather stays outside the camera shake.
     this.environment.drawWeather(context, view, palette);
+    if (run && !isMenu && run.levelPhase === 'celebrating') this.drawCelebrationWarmth(context, run);
     if (run && !isMenu && this.status === 'playing' && run.levelPhase === 'riding') this.drawObstacleWarning(context, run);
     if (!isMenu) this.drawEventBanner(context);
+  }
+
+  /**
+   * Phase 10A — while the rider celebrates inside the safe house, a soft warm
+   * glow breathes around the building and the screen edges dim slightly: a
+   * cinematic "rest moment" between levels. Purely additive screen-space
+   * drawing; it never touches the world, HUD or input.
+   */
+  private drawCelebrationWarmth(context: CanvasRenderingContext2D, run: RunState): void {
+    if (this.lighterGraphics) return;
+    const house = run.houses[run.houses.length - 1];
+    if (!house) return;
+    const seconds = this.levels.current.transitions.end.completionSeconds;
+    const envelope = Math.sin(Math.PI * clamp(run.sceneTime / seconds, 0, 1));
+    if (envelope <= 0.01) return;
+    const houseX = house.x - run.cameraX;
+    const houseY = house.groundY - 90;
+    const radius = Math.max(this.width, this.height) * 0.9;
+    const warmth = context.createRadialGradient(houseX, houseY, 20, houseX, houseY, radius);
+    warmth.addColorStop(0, `rgba(255, 206, 130, ${0.2 * envelope})`);
+    warmth.addColorStop(0.55, `rgba(255, 190, 120, ${0.06 * envelope})`);
+    warmth.addColorStop(1, 'rgba(24, 36, 56, 0)');
+    context.save();
+    context.fillStyle = warmth;
+    context.fillRect(0, 0, this.width, this.height);
+    const edges = context.createRadialGradient(this.width * 0.5, this.height * 0.52, this.height * 0.34, this.width * 0.5, this.height * 0.52, radius);
+    edges.addColorStop(0, 'rgba(16, 26, 44, 0)');
+    edges.addColorStop(1, `rgba(16, 26, 44, ${0.3 * envelope})`);
+    context.fillStyle = edges;
+    context.fillRect(0, 0, this.width, this.height);
+    context.restore();
   }
 
   /**
@@ -2116,7 +2193,7 @@ export class SnowGameEngine {
     const alpha = Math.min(1, active.intensity * 1.6) * 0.85;
     context.save();
     context.textAlign = 'center';
-    context.font = '600 11px system-ui';
+    context.font = canvasFont(600, 11);
     const label = definition.label.toUpperCase();
     const y = 30;
     context.globalAlpha = alpha * 0.55;
@@ -2137,7 +2214,7 @@ export class SnowGameEngine {
     context.fillStyle = '#f4d5a0';
     context.strokeStyle = '#263b50';
     context.lineWidth = 2;
-    context.font = '600 10px system-ui';
+    context.font = canvasFont(600, 10);
     context.textAlign = 'right';
     const label = `› ${(upcoming.plan?.obstacleId ?? upcoming.kind).replace(/-/g, ' ').toUpperCase()} AHEAD`;
     const x = this.width - 18;
@@ -2150,7 +2227,7 @@ export class SnowGameEngine {
   private drawObstacleDebug(context: CanvasRenderingContext2D, run: RunState, cameraX: number): void {
     context.save();
     context.lineWidth = 1;
-    context.font = '10px monospace';
+    context.font = canvasFont(400, 10);
     context.textAlign = 'left';
     this.drawDifficultyDebug(context, run);
     for (const object of run.objects) {
@@ -2567,6 +2644,9 @@ export class SnowGameEngine {
     context.restore();
   }
 
+  /** Phase 10A — reused terrain scanline buffer: no per-frame point allocations. */
+  private terrainSegment: Array<{ x: number; y: number }> = [];
+
   private drawTerrain(
     context: CanvasRenderingContext2D,
     width: number,
@@ -2576,10 +2656,17 @@ export class SnowGameEngine {
     run: RunState | null,
   ): void {
     const step = this.lighterGraphics ? 12 : 9;
-    let segment: Array<{ x: number; y: number }> = [];
+    const segment = this.terrainSegment;
+    let segmentLength = 0;
+    const push = (x: number, y: number) => {
+      const point = segment[segmentLength] ?? (segment[segmentLength] = { x: 0, y: 0 });
+      point.x = x;
+      point.y = y;
+      segmentLength += 1;
+    };
     const fill = () => {
-      if (segment.length < 2) {
-        segment = [];
+      if (segmentLength < 2) {
+        segmentLength = 0;
         return;
       }
 
@@ -2589,8 +2676,8 @@ export class SnowGameEngine {
       ground.addColorStop(1, palette.snowShade);
       context.beginPath();
       context.moveTo(segment[0].x, segment[0].y);
-      for (const point of segment) context.lineTo(point.x, point.y);
-      context.lineTo(segment[segment.length - 1].x, height + 40);
+      for (let index = 0; index < segmentLength; index += 1) context.lineTo(segment[index].x, segment[index].y);
+      context.lineTo(segment[segmentLength - 1].x, height + 40);
       context.lineTo(segment[0].x, height + 40);
       context.closePath();
       context.fillStyle = ground;
@@ -2598,19 +2685,23 @@ export class SnowGameEngine {
 
       context.beginPath();
       context.moveTo(segment[0].x, segment[0].y);
-      for (const point of segment) context.lineTo(point.x, point.y);
-      context.strokeStyle = alphaColor(colorMix(palette.snow, '#ffffff', 0.5), 0.9);
+      for (let index = 0; index < segmentLength; index += 1) context.lineTo(segment[index].x, segment[index].y);
+      // Phase 10A — at night the crest picks up a cool moonlit rim so the
+      // silhouette (and any hazard resting on it) stays readable.
+      const crestBase = colorMix(palette.snow, '#ffffff', 0.5);
+      const crest = colorMix(crestBase, '#c9e2f8', palette.night * 0.55);
+      context.strokeStyle = alphaColor(crest, Math.min(1, 0.9 + palette.night * 0.07));
       context.lineWidth = 2.4;
       context.lineJoin = 'round';
       context.stroke();
 
       context.beginPath();
       context.moveTo(segment[0].x, segment[0].y + 8);
-      for (const point of segment) context.lineTo(point.x, point.y + 8);
+      for (let index = 0; index < segmentLength; index += 1) context.lineTo(segment[index].x, segment[index].y + 8);
       context.strokeStyle = `rgba(118,152,177,${0.16 + palette.night * 0.07})`;
       context.lineWidth = 1;
       context.stroke();
-      segment = [];
+      segmentLength = 0;
     };
 
     for (let screenX = -18; screenX <= width + 18; screenX += step) {
@@ -2619,7 +2710,7 @@ export class SnowGameEngine {
       if (inGap) {
         fill();
       } else {
-        segment.push({ x: screenX, y: this.terrainAt(worldX) });
+        push(screenX, this.terrainAt(worldX));
       }
     }
     fill();
@@ -2781,7 +2872,7 @@ export class SnowGameEngine {
     context.stroke();
     context.shadowBlur = 0;
     context.fillStyle = color;
-    context.font = 'bold 14px system-ui';
+    context.font = canvasFont(700, 14);
     context.textAlign = 'center';
     context.textBaseline = 'middle';
     context.fillText(icon, x, y);
@@ -3440,7 +3531,7 @@ export class SnowGameEngine {
   private drawPopups(context: CanvasRenderingContext2D, run: RunState, cameraX: number): void {
     context.save();
     context.textAlign = 'center';
-    context.font = '700 12px ui-sans-serif, system-ui, sans-serif';
+    context.font = canvasFont(700, 12);
     for (const popup of run.popups) {
       context.globalAlpha = clamp(popup.life / popup.maxLife, 0, 1);
       context.fillStyle = popup.color;
@@ -3487,7 +3578,7 @@ export class SnowGameEngine {
 
     const wheelAngle = (distance / 6.5) % TAU;
 
-    for (const axle of [REAR_AXLE, FRONT_AXLE]) {
+    for (const axle of WHEEL_AXLES) {
       context.save();
       context.translate(axle, WHEEL_Y);
       context.rotate(wheelAngle);
@@ -3516,6 +3607,16 @@ export class SnowGameEngine {
       context.restore();
     }
 
+    // Phase 10A — the chassis sinks into its suspension while the wheels hold
+    // the ground (compression from the landing impact, decaying spring), and
+    // dips its nose slightly under the same load. Cadence: a soft pedal-rate
+    // bob keeps the grounded ride alive without moving the legs.
+    const squat = this.suspension;
+    const bob = grounded && !idle ? Math.sin(distance / 26) * 1.3 : 0;
+    context.save();
+    context.translate(0, squat * 3.4);
+    context.rotate(-squat * 0.07);
+
     context.strokeStyle = this.bike.color;
     context.lineWidth = 3.5;
     context.beginPath();
@@ -3531,8 +3632,9 @@ export class SnowGameEngine {
     context.lineTo(21, -34);
     context.stroke();
 
-    if (strength > 0) this.drawRiderOutline(context, grounded, idle, airTime, strength);
-    this.drawRiderBody(context, grounded, idle, airTime);
+    if (strength > 0) this.drawRiderOutline(context, grounded, idle, airTime, strength, bob);
+    this.drawRiderBody(context, grounded, idle, airTime, bob);
+    context.restore();
     context.restore();
   }
 
@@ -3543,7 +3645,7 @@ export class SnowGameEngine {
     glowContext: CanvasRenderingContext2D;
   };
 
-  private drawRiderOutline(context: CanvasRenderingContext2D, grounded: boolean, idle: boolean, airTime: number, strength: number): void {
+  private drawRiderOutline(context: CanvasRenderingContext2D, grounded: boolean, idle: boolean, airTime: number, strength: number, bob = 0): void {
     if (!this.riderOutline) {
       const mask = document.createElement('canvas');
       const glow = document.createElement('canvas');
@@ -3561,7 +3663,7 @@ export class SnowGameEngine {
     maskContext.translate(96, 140);
     maskContext.lineCap = 'round';
     maskContext.lineJoin = 'round';
-    this.drawRiderBody(maskContext, grounded, idle, airTime);
+    this.drawRiderBody(maskContext, grounded, idle, airTime, bob);
     maskContext.restore();
 
     glowContext.clearRect(0, 0, 192, 192);
@@ -3588,13 +3690,18 @@ export class SnowGameEngine {
     context.restore();
   }
 
-  private drawRiderBody(context: CanvasRenderingContext2D, grounded: boolean, idle: boolean, airTime: number): void {
+  private drawRiderBody(context: CanvasRenderingContext2D, grounded: boolean, idle: boolean, airTime: number, bob = 0): void {
     const tuckProgress = grounded ? 0 : clamp(airTime / 0.18, 0, 1);
     const tuck = 5 * tuckProgress * tuckProgress * (3 - 2 * tuckProgress);
     const shoulderX = 5 + tuck;
     const shoulderY = -43 + tuck;
     const flutter = Math.sin(this.clock * (idle ? 5 : 13)) * 4;
     const scarfEnd = idle ? -32 : -44;
+
+    // Phase 10A — the whole upper body rides the cadence bob (the glow mask
+    // passes the same value so the outline stays registered).
+    context.save();
+    context.translate(0, bob);
 
     // Keep the scarf behind the rider so the silhouette reads through a flip.
     context.fillStyle = this.character.scarf;
@@ -3666,6 +3773,7 @@ export class SnowGameEngine {
     context.moveTo(shoulderX - 2, shoulderY - 2);
     context.quadraticCurveTo(shoulderX + 4, shoulderY + 2, shoulderX + 10, shoulderY - 1);
     context.stroke();
+    context.restore();
   }
 
 }
