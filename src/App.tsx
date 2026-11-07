@@ -388,9 +388,10 @@ export default function App() {
     };
   }, [audio, ads]);
 
-  useEffect(() => {
-    if (hud.level?.phase === 'celebrating') audio.achievement();
-  }, [audio, hud.level?.phase, hud.level?.number]);
+  // Phase 10B — the level-completion cue now arrives as a 'complete' sound
+  // event emitted by the engine the moment the rider settles inside the safe
+  // house (see onSound → audio.handle), replacing the generic achievement
+  // chime that used to fire here off the HUD phase.
 
   // Studio splash timing. The game world is already rendering behind it, so
   // this also acts as the asset warm-up window without blocking first paint.

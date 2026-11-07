@@ -64,7 +64,13 @@ export type SoundEvent =
   | { type: 'land'; force: number; clean: boolean }
   | { type: 'trick'; flips: number; combo: number }
   | { type: 'coin' }
-  | { type: 'crash'; kind: 'rock' | 'tree' | 'landing' | 'fall' };
+  | { type: 'crash'; kind: 'rock' | 'tree' | 'landing' | 'fall' }
+  /** Phase 10B — power-up activation / expiration cues. */
+  | { type: 'power'; kind: PowerKind; phase: 'start' | 'end' }
+  /** Phase 10B — safe-house door, synced to the door animation. */
+  | { type: 'door'; phase: 'open' | 'close' }
+  /** Phase 10B — level completion (rider settles inside the safe house). */
+  | { type: 'complete' };
 
 export interface AudioFrameState {
   status: GameScreen;
@@ -565,6 +571,9 @@ export class SnowGameEngine {
     // Phase 10A — every fresh run begins with a relaxed suspension.
     this.suspension = 0;
     this.suspensionVelocity = 0;
+    // Phase 10B — fresh run, fresh power-cue state.
+    this.powerCueState = [];
+    this.doorCues = { approachOpen: false, celebrateClose: false, exitOpen: false, exitClose: false };
     const level = this.levels.current;
     this.environment.setLevel(level);
     const x = 0;
@@ -1101,6 +1110,10 @@ export class SnowGameEngine {
    */
   private suspension = 0;
   private suspensionVelocity = 0;
+  /** Phase 10B — powers that were active last frame, for expiration cues. */
+  private powerCueState: PowerKind[] = [];
+  /** Phase 10B — which door-animation cues have fired for the current house. */
+  private doorCues = { approachOpen: false, celebrateClose: false, exitOpen: false, exitClose: false };
   /** Phase 9B dev previews — fixed day phase / storm strength (null = live). */
   private dayPhasePreview?: number;
   private devStorm = 0;
@@ -1189,6 +1202,23 @@ export class SnowGameEngine {
 
   private rideAngle(run: RunState, x: number): number {
     return Math.atan2(this.rideHeight(run, x + 8) - this.rideHeight(run, x - 8), 16);
+  }
+
+  /**
+   * Phase 10B — emits an expiration cue when a timed power (magnet/double)
+   * drops off. Shield only ends by absorbing a hit (cued in crashInto) or by
+   * the run ending (finishRun clears the state), so it never fires here
+   * spuriously.
+   */
+  private trackPowerCues(run: RunState): void {
+    const active: PowerKind[] = [];
+    if (run.magnetUntil > run.elapsed) active.push('magnet');
+    if (run.shield) active.push('shield');
+    if (run.doubleUntil > run.elapsed) active.push('double');
+    for (const kind of this.powerCueState) {
+      if (!active.includes(kind)) this.emit({ type: 'power', kind, phase: 'end' });
+    }
+    this.powerCueState = active;
   }
 
   private nextRandom(run: RunState): number {
@@ -1402,6 +1432,8 @@ export class SnowGameEngine {
       return;
     }
     run.distance = rider.x;
+    // Phase 10B — detect powers that expired since the last riding frame.
+    this.trackPowerCues(run);
     if (run.elapsed < START_PAUSE) {
       this.jumpQueued = false;
       return;
@@ -1566,6 +1598,8 @@ export class SnowGameEngine {
     run.houses.push(house);
     run.levelPhase = 'approach';
     run.sceneTime = 0;
+    // Phase 10B — fresh door cues for the new house.
+    this.doorCues = { approachOpen: false, celebrateClose: false, exitOpen: false, exitClose: false };
     run.sceneStartSpeed = Math.max(205, run.rider.speed);
     run.objects = run.objects.filter((object) => object.x + (object.width ?? 50) < run.rider.x - 60);
     run.popups = [];
@@ -1598,6 +1632,12 @@ export class SnowGameEngine {
       const targetSpeed = Math.min(run.sceneStartSpeed, 35 + Math.max(0, remaining) * 0.72);
       rider.speed = lerp(rider.speed, targetSpeed, 1 - Math.exp(-3 * delta));
       rider.x = Math.min(doorX - 18, rider.x + rider.speed * delta);
+      // Phase 10B — the door starts swinging open 240 px out (matching
+      // houseDoorOpenness); cue it once as it begins to move.
+      if (!this.doorCues.approachOpen && remaining <= 240) {
+        this.doorCues.approachOpen = true;
+        this.emit({ type: 'door', phase: 'open' });
+      }
       if (rider.x >= doorX - 18) {
         run.levelPhase = 'entering';
         run.sceneTime = 0;
@@ -1623,6 +1663,8 @@ export class SnowGameEngine {
         this.burst(run, house.x - 4, house.groundY - 132, 12, '#fff1cd', 52, -60);
         run.levelPhase = 'celebrating';
         run.sceneTime = 0;
+        // Phase 10B — a short, satisfying musical cue as the level completes.
+        this.emit({ type: 'complete' });
         // Cross-fade the whole environment while the rider is inside the
         // safe house, finishing as they ride out into the new level.
         const upcoming = this.levels.getLevel(this.levels.current.number + 1);
@@ -1635,6 +1677,12 @@ export class SnowGameEngine {
       }
     } else if (run.levelPhase === 'celebrating') {
       rider.speed = 0;
+      // Phase 10B — the door shuts behind the rider (houseDoorOpenness
+      // begins closing at sceneTime 0.55); cue it once as it starts to swing.
+      if (!this.doorCues.celebrateClose && run.sceneTime >= 0.55) {
+        this.doorCues.celebrateClose = true;
+        this.emit({ type: 'door', phase: 'close' });
+      }
       if (run.sceneTime >= this.levels.current.transitions.end.completionSeconds) {
         this.syncLevelScore(run);
         const nextLevel = this.levels.advanceAfterTransition();
@@ -1653,6 +1701,9 @@ export class SnowGameEngine {
         run.levelPhase = 'exiting';
         run.sceneTime = 0;
         run.riderOpacity = 0;
+        // Phase 10B — the door reopens for the exit ride.
+        this.doorCues.exitOpen = true;
+        this.emit({ type: 'door', phase: 'open' });
         run.winterMix = 0;
         run.snowRate = this.environment.snowIntensity;
         run.seed = nextLevel.seed;
@@ -1667,6 +1718,12 @@ export class SnowGameEngine {
       rider.speed = 220 * t * t * (3 - 2 * t);
       rider.x += rider.speed * delta;
       run.riderOpacity = clamp(run.sceneTime / 0.85, 0, 1);
+      // Phase 10B — the door swings shut once the rider has ridden clear
+      // (houseDoorOpenness starts closing 70 px past the doorway).
+      if (!this.doorCues.exitClose && rider.x - doorX >= 70) {
+        this.doorCues.exitClose = true;
+        this.emit({ type: 'door', phase: 'close' });
+      }
       if (t === 1) {
         run.levelPhase = 'riding';
         run.distance = rider.x;
@@ -1778,6 +1835,8 @@ export class SnowGameEngine {
         if (power === 'magnet') run.magnetUntil = run.elapsed + REWARD_CONFIG.abilities.magnetSeconds;
         if (power === 'double') run.doubleUntil = run.elapsed + REWARD_CONFIG.abilities.doubleSeconds;
         if (power === 'shield') run.shield = true;
+        // Phase 10B — distinct activation cue per power kind.
+        this.emit({ type: 'power', kind: power, phase: 'start' });
         this.burst(run, x, y, 15, POWERS[power].color, 110, -45);
         this.popup(run, x, y - 16, POWERS[power].label.toUpperCase(), POWERS[power].color);
       } else {
@@ -1858,6 +1917,10 @@ export class SnowGameEngine {
     if (run.shield) {
       run.shield = false;
       run.invulnerableUntil = run.elapsed + 0.65;
+      // Phase 10B — the shield ends by absorbing the hit; suppress the
+      // generic expiration cue so it is not played twice.
+      this.powerCueState = this.powerCueState.filter((kind) => kind !== 'shield');
+      this.emit({ type: 'power', kind: 'shield', phase: 'end' });
       this.burst(run, rider.x, rider.y - 16, 18, POWERS.shield.color, 130, -55);
       this.popup(run, rider.x, rider.y - 52, 'SHIELD USED', POWERS.shield.color);
       return false;
@@ -1875,6 +1938,8 @@ export class SnowGameEngine {
     run.crashReason = reason;
     run.crashesThisLevel += 1;
     run.distance = run.rider.x;
+    // Phase 10B — no expiration cues across the crash/revive/restart flow.
+    this.powerCueState = [];
     // Phase 8 — a brief, purely cosmetic tumble: the rider pops over the
     // bars, slides and spins to a stop. The camera stays put, the score is
     // already frozen, and no further collision logic runs while over.

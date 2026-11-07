@@ -56,6 +56,13 @@ export class AudioManager {
   private nightAir!: Loop;
   /** Phase 9B — leaf rustle for forest themes. */
   private leaves!: Loop;
+  /** Phase 10B — leaf-litter crackle under the wheels (moonlit forest). */
+  private crackle!: Loop;
+  /**
+   * Phase 10B — rare-challenge tension: two detuned saws a minor ninth
+   * apart behind a dark lowpass, slowly breathing. Gain rests at 0.
+   */
+  private tension!: { gain: GainNode; oscA: OscillatorNode; oscB: OscillatorNode };
 
   private schedulerId = 0;
   private musicOn = false;
@@ -65,12 +72,16 @@ export class AudioManager {
   private intensity = 0.6;
   private night = 0;
   private status: AudioFrameState['status'] = 'menu';
+  /** Phase 10B — last observed theme/event, kept for interval-driven critters. */
+  private theme: AudioFrameState['theme'] = 'countryside';
+  private event: AudioFrameState['event'] = null;
 
   private lastUpdate = 0;
   private lastPlayed = new Map<string, number>();
   private coinStreak = 0;
   private lastCoin = 0;
-  private activeVoices = 0;
+  /** Phase 10B — global budget of live one-shot voices (perf requirement). */
+  private voices = 0;
   private lastVocal = -100;
   private nextCritter = 0;
   private spinWhoosh: { gain: GainNode; filter: BiquadFilterNode } | null = null;
@@ -197,6 +208,44 @@ export class AudioManager {
     this.storm = this.makeLoop('bandpass', 700, 0.5, this.ambientBus);
     this.nightAir = this.makeLoop('lowpass', 260, 0.7, this.ambientBus);
     this.leaves = this.makeLoop('bandpass', 1650, 0.8, this.ambientBus);
+    // Phase 10B — dry leaf litter under the wheels (bandpass centre 2.4 kHz).
+    this.crackle = this.makeLoop('bandpass', 2400, 1.6, this.sfxBus);
+
+    // Phase 10B — tension drone (rare-challenge events). D2 vs Eb2: a minor
+    // ninth, filtered very dark and pulsed by a slow tremolo so it reads as
+    // unease rather than a pitch. Rests silent until an event asks for it.
+    {
+      const tensionFilter = ctx.createBiquadFilter();
+      tensionFilter.type = 'lowpass';
+      tensionFilter.frequency.value = 260;
+      tensionFilter.Q.value = 0.5;
+      const tremolo = ctx.createGain();
+      const lfo = ctx.createOscillator();
+      lfo.frequency.value = 0.35;
+      const lfoGain = ctx.createGain();
+      lfoGain.gain.value = 0.35;
+      lfo.connect(lfoGain).connect(tremolo.gain);
+      tremolo.gain.value = 0.65;
+      const tensionGain = ctx.createGain();
+      tensionGain.gain.value = 0;
+      // Routed through the music tone/fade chain so pause and crash ducking
+      // apply to it exactly like the rest of the music.
+      tensionFilter.connect(tremolo).connect(tensionGain).connect(this.musicTone);
+      const oscA = ctx.createOscillator();
+      oscA.type = 'sawtooth';
+      oscA.frequency.value = 73.42; // D2
+      const oscB = ctx.createOscillator();
+      oscB.type = 'sawtooth';
+      oscB.frequency.value = 77.78; // Eb2
+      oscA.detune.value = -6;
+      oscB.detune.value = 6;
+      oscA.connect(tensionFilter);
+      oscB.connect(tensionFilter);
+      oscA.start();
+      oscB.start();
+      lfo.start();
+      this.tension = { gain: tensionGain, oscA, oscB };
+    }
 
     this.schedulerId = window.setInterval(() => this.schedule(), 90);
   }
@@ -418,6 +467,10 @@ export class AudioManager {
   // ───────────────────────── continuous state ─────────────────────────
   update(s: AudioFrameState): void {
     this.status = s.status;
+    // Phase 10B — theme and event are cached before any early return so the
+    // interval-driven critters always see the freshest world state.
+    this.theme = s.theme;
+    this.event = s.event ?? null;
     if (!this.ctx || this.ctx.state !== 'running') return;
     const now = this.ctx.currentTime;
     if (now - this.lastUpdate < (this.android ? 0.09 : 0.05)) return;
@@ -426,10 +479,25 @@ export class AudioManager {
     const tc = 0.12;
     const playing = s.status === 'playing';
 
-    // Board on snow – brighter and louder with speed, silent in the air
-    const glideLevel = playing && s.moving && s.grounded ? 0.05 + s.speed * 0.11 + Math.max(0, s.slope) * 0.05 : 0;
+    // Phase 10B — calm journeys soften the contact sound along with the music.
+    const calm = this.event && this.event.id === 'calm-journey' ? this.event.intensity : 0;
+
+    // Board on snow – brighter and louder with speed, silent in the air.
+    // Phase 10B — the riding surface tints it: valley grass reads rounder
+    // and a touch softer, mist muffles it, the forest floor is leafy rather
+    // than icy.
+    const surfaceTone = s.theme === 'countryside' ? 0.72 : s.theme === 'misty-mountains' ? 0.66 : s.theme === 'moonlit-forest' ? 0.85 : 1;
+    const surfaceGain = s.theme === 'countryside' ? 0.85 : s.theme === 'misty-mountains' ? 0.9 : 1;
+    const glideLevel = playing && s.moving && s.grounded
+      ? (0.05 + s.speed * 0.11 + Math.max(0, s.slope) * 0.05) * surfaceGain * (1 - 0.25 * calm)
+      : 0;
     this.glide.gain.gain.setTargetAtTime(glideLevel * (0.85 + Math.random() * 0.3), now, playing && !s.grounded ? 0.03 : tc);
-    this.glide.filter.frequency.setTargetAtTime(900 + s.speed * 1900 + Math.random() * 250, now, tc);
+    this.glide.filter.frequency.setTargetAtTime((900 + s.speed * 1900 + Math.random() * 250) * surfaceTone, now, tc);
+
+    // Phase 10B — dry leaves crackling under the wheels, forest floor only,
+    // never while airborne.
+    const crackleLevel = playing && s.moving && s.grounded && s.theme === 'moonlit-forest' ? 0.012 + s.speed * 0.02 : 0;
+    this.crackle.gain.gain.setTargetAtTime(crackleLevel, now, tc);
 
     // Wind – speed, air time, steep downhill and storms all push it up
     const airborne = playing && !s.grounded;
@@ -456,7 +524,9 @@ export class AudioManager {
     this.nightAir.gain.gain.setTargetAtTime(s.night * 0.06, now, 1);
 
     // Phase 9B — quiet forest rustle for the wooded themes only.
-    const rustle = theme === 'moonlit-forest' ? 0.02 + s.wind * 0.032 : theme === 'misty-mountains' ? 0.008 + s.wind * 0.016 : 0;
+    // Phase 10B — forest-wind events push the rustle up with their envelope.
+    const eventRustle = event && event.id === 'forest-wind' ? 0.05 * event.intensity : 0;
+    const rustle = (theme === 'moonlit-forest' ? 0.02 + s.wind * 0.032 : theme === 'misty-mountains' ? 0.008 + s.wind * 0.016 : 0) + eventRustle;
     this.leaves.gain.gain.setTargetAtTime(rustle, now, 0.9);
     this.leaves.filter.frequency.setTargetAtTime(1500 + s.wind * 900 + Math.sin(now * 0.5) * 180, now, 0.8);
 
@@ -467,6 +537,12 @@ export class AudioManager {
     this.musicTone.frequency.setTargetAtTime(lerp(4200, 1900, s.night) * (s.status === 'paused' ? 0.35 : 1)
       // Phase 9D — golden hour warms the ambient tone, calm journeys soften it.
       * (event ? (event.id === 'golden-hour' ? 1 + 0.07 * event.intensity : event.id === 'calm-journey' ? 1 - 0.05 * event.intensity : 1) : 1), now, 0.6);
+
+    // Phase 10B — rare challenges introduce a very subtle musical tension:
+    // the low drone breathes in with the event envelope and rests at zero
+    // otherwise. Slow time constants keep the creep in/out gentle.
+    const tension = playing && event && event.id === 'rare-challenge' ? 0.028 * event.intensity : 0;
+    this.tension.gain.gain.setTargetAtTime(tension, now, 1.2);
   }
 
   private startSpinWhoosh(): void {
@@ -504,14 +580,67 @@ export class AudioManager {
     this.spinWhoosh = null;
   }
 
-  // Distant birds by day, an owl at night – rare by design
+  /**
+   * Sparse wildlife, themed by environment and time of day (Phase 10B):
+   * Green Valley is lively by day; Misty Mountains and the forest are
+   * sparser; Snowy Mountains stay quiet and spacious. Dusk stretches the
+   * gaps. Night brings crickets to the valley and forest, an owl elsewhere.
+   */
   private critters(now: number): void {
     if (this.status === 'paused') return;
-    if (this.nextCritter === 0) this.nextCritter = now + 6;
+    if (this.nextCritter === 0) {
+      this.nextCritter = now + 6;
+      return;
+    }
     if (now < this.nextCritter) return;
-    this.nextCritter = now + 9 + Math.random() * 14;
-    if (this.night < 0.35) this.bird(now);
-    else if (this.night > 0.75 && Math.random() < 0.55) this.owl(now);
+    // Calm journeys let nature rest — fewer calls, softer world.
+    const calm = this.event && this.event.id === 'calm-journey' ? this.event.intensity : 0;
+    const dusk = this.night >= 0.35 && this.night <= 0.75;
+    this.nextCritter = now + ((dusk ? 15 : 9) + Math.random() * 14) * (1 + calm * 1.6);
+    if (calm > 0.5) return;
+    const scale = 1 - calm * 0.5;
+    if (this.night < 0.35) {
+      const chance = this.theme === 'countryside' ? 1
+        : this.theme === 'misty-mountains' ? 0.45
+          : this.theme === 'moonlit-forest' ? 0.6
+            : 0; // snowy mountains: quiet, spacious
+      if (Math.random() < chance * scale) this.bird(now);
+    } else if (this.night > 0.75) {
+      if ((this.theme === 'countryside' || this.theme === 'moonlit-forest') && Math.random() < 0.75 * scale) this.cricket(now);
+      else if (Math.random() < 0.5 * scale) this.owl(now);
+    }
+  }
+
+  /** Phase 10B — a night cricket: tiny rapid chirp bursts, almost subliminal. */
+  private cricket(t: number): void {
+    const ctx = this.ctx!;
+    const pan = ctx.createStereoPanner();
+    pan.pan.value = Math.random() * 1.4 - 0.7;
+    const out = ctx.createGain();
+    out.gain.value = 0.016;
+    out.connect(pan).connect(this.ambientBus);
+    const bursts = 3 + Math.floor(Math.random() * 3);
+    const base = 4200 + Math.random() * 400;
+    for (let i = 0; i < bursts; i++) {
+      const burst = t + i * 0.34 + Math.random() * 0.05;
+      for (let p = 0; p < 3; p++) {
+        const s = burst + p * 0.055;
+        const o = ctx.createOscillator();
+        o.type = 'square';
+        o.frequency.value = base;
+        const bp = ctx.createBiquadFilter();
+        bp.type = 'bandpass';
+        bp.frequency.value = base;
+        bp.Q.value = 9;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0, s);
+        g.gain.linearRampToValueAtTime(1, s + 0.012);
+        g.gain.linearRampToValueAtTime(0, s + 0.042);
+        o.connect(bp).connect(g).connect(out);
+        o.start(s);
+        o.stop(s + 0.05);
+      }
+    }
   }
 
   private bird(t: number): void {
@@ -578,12 +707,25 @@ export class AudioManager {
     return true;
   }
 
+  /**
+   * Phase 10B — claims a slot in the live one-shot voice budget so dense
+   * moments drop the quietest new sounds instead of stacking into clutter
+   * (or into CPU spikes on weak devices). Slots release themselves.
+   */
+  private claim(seconds: number): boolean {
+    if (this.voices >= 18) return false;
+    this.voices += 1;
+    window.setTimeout(() => { this.voices -= 1; }, (seconds + 0.1) * 1000);
+    return true;
+  }
+
   private noiseHit(o: {
     t?: number; dur: number; type: BiquadFilterType; f0: number; f1?: number; q?: number;
     gain: number; attack?: number; wet?: number; dest?: AudioNode;
   }): void {
     const ctx = this.ctx!;
     const t = o.t ?? ctx.currentTime;
+    if (!this.claim(o.dur)) return;
     const src = ctx.createBufferSource();
     src.buffer = this.noise;
     const f = ctx.createBiquadFilter();
@@ -612,6 +754,7 @@ export class AudioManager {
   }): void {
     const ctx = this.ctx!;
     const t = o.t ?? ctx.currentTime;
+    if (!this.claim(o.dur)) return;
     const osc = ctx.createOscillator();
     osc.type = o.type ?? 'sine';
     osc.frequency.setValueAtTime(o.freq, t);
@@ -632,9 +775,6 @@ export class AudioManager {
 
   /** Glassy bell – used for coins and reward cues. */
   private bell(freq: number, t: number, gain: number, decay = 0.9, wet = 0.5): void {
-    if (this.activeVoices > 14) return;
-    this.activeVoices++;
-    window.setTimeout(() => { this.activeVoices--; }, decay * 1000);
     this.tone({ t, freq, dur: decay, gain, wet });
     this.tone({ t, freq: freq * 2.0, dur: decay * 0.5, gain: gain * 0.28, wet });
     this.tone({ t, freq: freq * 3.01, dur: decay * 0.25, gain: gain * 0.1 });
@@ -652,6 +792,7 @@ export class AudioManager {
       aah: { p: [360, 330, 230], f1: [720, 700, 620], f2: [1200, 1150, 1000], dur: 0.65 },
     };
     const s = shapes[kind];
+    if (!this.claim(s.dur)) return;
     const osc = ctx.createOscillator();
     osc.type = 'sawtooth';
     const third = s.dur / 2;
@@ -750,7 +891,96 @@ export class AudioManager {
       case 'crash':
         this.crash(e.kind);
         break;
+      case 'power':
+        this.powerCue(e.kind, e.phase === 'start');
+        break;
+      case 'door':
+        this.door(e.phase === 'open');
+        break;
+      case 'complete':
+        this.levelComplete();
+        break;
     }
+  }
+
+  /**
+   * Phase 10B — power-up cues. Each activation is distinct (magnet shimmers
+   * upward, the shield lands as a warm low chime, double points sparkle in
+   * octaves); expiration is always a soft two-note settle so any power fading
+   * reads the same gentle way.
+   */
+  private powerCue(kind: 'magnet' | 'shield' | 'double', onStart: boolean): void {
+    if (!this.throttle(`power-${kind}`, 0.25)) return;
+    const now = this.ctx!.currentTime;
+    if (onStart) {
+      if (kind === 'magnet') {
+        this.noiseHit({ dur: 0.5, type: 'bandpass', f0: 500, f1: 3000, q: 1.4, gain: 0.045, attack: 0.06, wet: 0.5 });
+        this.bell(mtof(81), now + 0.02, 0.05, 0.9, 0.7);
+        this.bell(mtof(88), now + 0.14, 0.04, 1.1, 0.8);
+      } else if (kind === 'shield') {
+        this.tone({ freq: mtof(50), dur: 0.9, gain: 0.05, attack: 0.12, wet: 0.5 });
+        this.bell(mtof(62), now + 0.05, 0.055, 1.6, 0.9);
+        this.bell(mtof(69), now + 0.16, 0.035, 1.4, 0.8);
+      } else {
+        this.bell(mtof(81), now, 0.05, 0.8, 0.6);
+        this.bell(mtof(93), now + 0.1, 0.045, 1.0, 0.7);
+        this.noiseHit({ t: now + 0.05, dur: 0.5, type: 'highpass', f0: 6000, gain: 0.02, attack: 0.08, wet: 0.9 });
+      }
+    } else {
+      // Expiration: a gentle descending settle, common to all powers.
+      this.bell(mtof(76), now, 0.035, 0.8, 0.6);
+      this.bell(mtof(69), now + 0.12, 0.03, 1.0, 0.7);
+    }
+  }
+
+  /**
+   * Phase 10B — safe-house door. Opening is a soft wooden creak (a slow
+   * filtered saw with a latch click); closing is a low thump plus the latch.
+   * Both stay very quiet — they are atmosphere, not events.
+   */
+  private door(open: boolean): void {
+    if (!this.throttle('door', 0.4)) return;
+    const ctx = this.ctx!;
+    const now = ctx.currentTime;
+    if (open) {
+      const osc = ctx.createOscillator();
+      osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(130, now);
+      osc.frequency.linearRampToValueAtTime(175, now + 0.5);
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = 850;
+      lp.Q.value = 2;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0, now);
+      g.gain.linearRampToValueAtTime(0.035, now + 0.1);
+      g.gain.linearRampToValueAtTime(0, now + 0.55);
+      osc.connect(lp).connect(g).connect(this.sfxBus);
+      const wet = ctx.createGain();
+      wet.gain.value = 0.5;
+      g.connect(wet).connect(this.reverbSend);
+      osc.start(now);
+      osc.stop(now + 0.6);
+      this.noiseHit({ t: now, dur: 0.05, type: 'highpass', f0: 2800, gain: 0.03 }); // latch
+    } else {
+      this.tone({ freq: 105, freqEnd: 62, dur: 0.22, gain: 0.07, wet: 0.35 });
+      this.noiseHit({ t: now + 0.06, dur: 0.05, type: 'highpass', f0: 2400, gain: 0.04 }); // latch
+      this.noiseHit({ t: now + 0.05, dur: 0.3, type: 'lowpass', f0: 700, f1: 200, gain: 0.03, attack: 0.02 });
+    }
+  }
+
+  /**
+   * Phase 10B — level completion: a short rising piano arpeggio over a warm
+   * pad swell, with a touch of sparkle. Satisfying but gentle, and routed
+   * through the SFX bus so it is heard even while the music rests.
+   */
+  private levelComplete(): void {
+    if (!this.throttle('complete', 1.5)) return;
+    const now = this.ctx!.currentTime;
+    this.tone({ freq: mtof(50), dur: 1.6, gain: 0.04, attack: 0.25, wet: 0.4 });
+    [62, 66, 69, 74].forEach((n, i) => this.pianoSfx(mtof(n), now + 0.05 + i * 0.1, 0.1 - i * 0.008, 2.6));
+    this.pianoSfx(mtof(78), now + 0.48, 0.08, 3.2);
+    this.noiseHit({ t: now + 0.35, dur: 1.1, type: 'highpass', f0: 6500, gain: 0.022, attack: 0.3, wet: 1 });
   }
 
   private tumble(t: number, bumps: number): void {
@@ -831,6 +1061,7 @@ export class AudioManager {
   /** Piano routed through the SFX bus so it survives the music fade-out. */
   private pianoSfx(freq: number, t: number, vel: number, decay: number): void {
     const ctx = this.ctx!;
+    if (!this.claim(decay)) return;
     const g = ctx.createGain();
     g.gain.setValueAtTime(0, t);
     g.gain.linearRampToValueAtTime(vel, t + 0.01);
