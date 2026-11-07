@@ -660,6 +660,10 @@ export class EnvironmentManager {
   private resolvedWeather: WeatherEffectConfig[] = [];
   private resolvedAmbient: AmbientStyle = { ...EMPTY_AMBIENT };
   private resolvedColors = { fog: '#ffffff', foliage: '#4f8f52', foliageDark: '#3c7442', accent: '#f6e9b2', stone: '#98a5a8', ambient: '#ffffff' };
+  /** Phase 10C — reusable scratch for the per-frame shaded decoration set. */
+  private shadedDecorationColors: { foliage: string; foliageDark: string; accent: string; stone: string } = {
+    foliage: '', foliageDark: '', accent: '', stone: '',
+  };
   private resolvedSpray = { color: '#ffffff', rate: 0.5, size: 1 };
   private resolvedBurst = { heavy: '#ffffff', soft: '#ffffff' };
 
@@ -1399,14 +1403,15 @@ export class EnvironmentManager {
     if (alpha <= 0.01) return;
     // Phase 9B — vegetation now shades with the day cycle (accents keep their
     // luminescence so glow-shrooms and flowers still read at night).
+    // Phase 10C — the colour set mutates one persistent object instead of
+    // allocating a fresh one per field per frame.
     const base = this.resolvedColors;
     const shade = palette.night * 0.5;
-    const colors = {
-      foliage: mixColor(base.foliage, palette.near, shade),
-      foliageDark: mixColor(base.foliageDark, palette.near, shade),
-      accent: base.accent,
-      stone: mixColor(base.stone, palette.near, shade),
-    };
+    const colors = this.shadedDecorationColors;
+    colors.foliage = mixColor(base.foliage, palette.near, shade);
+    colors.foliageDark = mixColor(base.foliageDark, palette.near, shade);
+    colors.accent = base.accent;
+    colors.stone = mixColor(base.stone, palette.near, shade);
     field.forEachVisible(view.cameraX, view.width, (decoration) => {
       const halfWidth = DECORATION_HALF_WIDTH[decoration.kind] * decoration.scale;
       if (reserved(decoration.x, halfWidth)) return;

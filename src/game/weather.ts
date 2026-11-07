@@ -160,12 +160,28 @@ export class WeatherSystem {
     if (!count) return;
     context.save();
     context.fillStyle = '#ffffff';
-    for (let index = 0; index < count; index += 1) {
-      const particle = this.pools.snow[index];
-      context.globalAlpha = (0.28 + particle.depth * 0.42) * (0.8 + night * 0.2);
+    // Phase 10C — flakes are batched into four depth bands (one path + fill
+    // each) instead of one fill per flake. The band quantises only the alpha
+    // (steps of ~0.1 on 1-3 px dots — imperceptible); positions, sizes and
+    // the day/night tint are unchanged.
+    const bands = 4;
+    const nightTint = 0.8 + night * 0.2;
+    for (let band = 0; band < bands; band += 1) {
+      const low = band / bands;
+      const high = (band + 1) / bands;
+      let any = false;
+      context.globalAlpha = (0.28 + (low + high) / 2 * 0.42) * nightTint;
       context.beginPath();
-      context.arc(particle.x, particle.y, particle.size * (0.55 + particle.depth * 0.75), 0, TAU);
-      context.fill();
+      for (let index = 0; index < count; index += 1) {
+        const particle = this.pools.snow[index];
+        if (particle.depth < low || particle.depth >= high) continue;
+        any = true;
+        const radius = particle.size * (0.55 + particle.depth * 0.75);
+        // Start a fresh subpath per flake so arcs never link with a line.
+        context.moveTo(particle.x + radius, particle.y);
+        context.arc(particle.x, particle.y, radius, 0, TAU);
+      }
+      if (any) context.fill();
     }
     context.restore();
   }

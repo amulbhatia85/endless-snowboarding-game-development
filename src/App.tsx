@@ -651,6 +651,10 @@ export default function App() {
     window.addEventListener('pointercancel', handlePointerUp);
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    // Phase 10C — long-press on touch devices must not raise the browser
+    // context menu over the play surface (jump-and-hold is a core control).
+    const handleContextMenu = (event: MouseEvent) => event.preventDefault();
+    canvas.addEventListener('contextmenu', handleContextMenu);
 
     return () => {
       canvas.removeEventListener('pointerdown', handlePointerDown);
@@ -658,6 +662,7 @@ export default function App() {
       window.removeEventListener('pointercancel', handlePointerUp);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      canvas.removeEventListener('contextmenu', handleContextMenu);
     };
   }, []);
 

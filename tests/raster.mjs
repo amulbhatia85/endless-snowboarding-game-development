@@ -223,7 +223,11 @@ class RasterContext {
       for (let index = 0; index < screenPath.length - 1; index += 1) {
         const a = screenPath[index];
         const b = screenPath[index + 1];
-        if (b.move) continue;
+        // A segment whose endpoint is a moveTo starts a new subpath — the
+        // connector from the previous subpath is not an edge (browser
+        // semantics). Phase 10C: the flag lives on the original path points,
+        // not on the transformed pairs.
+        if (this.path[index + 1].move) continue;
         if ((a[1] <= py && b[1] > py) || (b[1] <= py && a[1] > py)) {
           crossings.push(a[0] + (py - a[1]) / (b[1] - a[1]) * (b[0] - a[0]));
         }

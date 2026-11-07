@@ -96,6 +96,8 @@ export const POWERS = {
 } as const;
 type PowerKind = keyof typeof POWERS;
 const POWER_ORDER: PowerKind[] = ['magnet', 'shield', 'double'];
+/** Phase 10C — membership test for the pickup pass (was Array#find). */
+const POWER_KINDS = new Set<string>(POWER_ORDER);
 
 type ObstacleKind = 'coin' | 'rock' | 'tree' | 'gap' | 'ramp' | 'log' | 'swinging-log'
   | 'root' | 'fence' | 'ice' | 'icicle' | 'snowball' | 'branch' | PowerKind;
@@ -289,6 +291,11 @@ const FRONT_AXLE = 25;
 const WHEEL_CONTACT_Y = 5;
 /** Phase 10A — hoisted so the render/loop paths allocate no per-frame arrays. */
 const WHEEL_AXLES: readonly number[] = [REAR_AXLE, FRONT_AXLE];
+/** Phase 10C — hard particle ceiling so bursts can never snowball memory. */
+const MAX_PARTICLES = 400;
+/** Phase 10C — measured auto-quality thresholds (ms of engine work per frame). */
+const AUTO_QUALITY_SLOW_MS = 18;
+const AUTO_QUALITY_FAST_MS = 10;
 /**
  * Phase 10A — canvas text now speaks the same typography as the DOM shell
  * ("Avenir Next", Avenir, "Segoe UI") so popups, warnings and icons never
@@ -371,7 +378,14 @@ export class SnowGameEngine {
   }
 
   private get lighterGraphics(): boolean {
-    return this.graphicsQuality === 'balanced' || (this.android && this.graphicsQuality === 'auto');
+    return this.graphicsQuality === 'balanced'
+      || (this.android && this.graphicsQuality === 'auto')
+      || (this.graphicsQuality === 'auto' && this.autoDegraded);
+  }
+
+  /** Phase 10C — true when measured auto quality has engaged the lighter tier. */
+  get autoQualityDegraded(): boolean {
+    return this.autoDegraded;
   }
 
   readonly levels: LevelManager<RunState>;
@@ -403,6 +417,18 @@ export class SnowGameEngine {
   private devFrameMsAverage = 0;
   private devFrameMsMax = 0;
   private devFrameSamples = 0;
+  /**
+   * Phase 10C — measured auto quality. `frameCostAverage` is an EMA of the
+   * engine's own per-frame work (ms). When 'auto' quality is selected and
+   * frames stay expensive, the cosmetic 'lighter' tier engages; after a long
+   * stretch of clear headroom it releases. Hysteresis (different thresholds,
+   * a 0.75 s engage streak vs a 15 s release streak) keeps it from flapping.
+   */
+  private frameCostAverage = 0;
+  private frameCostSamples = 0;
+  private slowFrameStreak = 0;
+  private fastFrameStreak = 0;
+  private autoDegraded = false;
   private fairnessViolations: FeasibilityViolation[] = [];
   /** Fixed terrain-complexity sampling window: generation must not depend on
    *  the viewport, or wide and narrow screens would diverge (see tests). */
@@ -703,6 +729,10 @@ export class SnowGameEngine {
 
   setGraphicsQuality(quality: GraphicsQuality): void {
     this.graphicsQuality = quality;
+    // A manual choice overrides the measured adaptation until the next run.
+    this.autoDegraded = false;
+    this.slowFrameStreak = 0;
+    this.fastFrameStreak = 0;
     this.handleResize();
   }
 
@@ -1012,7 +1042,9 @@ export class SnowGameEngine {
   }
 
   private readonly frame = (timestamp: number) => {
-    const devStarted = this.obstacleDebug ? performance.now() : 0;
+    // Phase 10C — the engine's own work is now always timed (it feeds the
+    // measured auto-quality adaptation); the dev overlay reads the same EMA.
+    const devStarted = performance.now();
     const delta = this.lastFrame === 0 ? 0 : clamp((timestamp - this.lastFrame) / 1000, 0, 0.1);
     this.lastFrame = timestamp;
 
@@ -1092,14 +1124,54 @@ export class SnowGameEngine {
       });
     }
     this.frameHandle = window.requestAnimationFrame(this.frame);
-    // Phase 9E — dev-only frame telemetry (exponential moving average + peak).
-    if (this.obstacleDebug && devStarted) {
+    // Phase 9E/10C — frame telemetry (exponential moving average + peak) now
+    // always feeds the measured auto-quality adaptation; the dev overlay and
+    // obstacle debug read the same numbers.
+    if (devStarted) {
       const elapsed = performance.now() - devStarted;
-      this.devFrameSamples += 1;
-      this.devFrameMsAverage += (elapsed - this.devFrameMsAverage) / Math.min(this.devFrameSamples, 240);
-      this.devFrameMsMax = Math.max(this.devFrameMsMax, elapsed);
+      this.frameCostSamples += 1;
+      this.frameCostAverage += (elapsed - this.frameCostAverage) / Math.min(this.frameCostSamples, 240);
+      if (this.obstacleDebug) {
+        this.devFrameSamples += 1;
+        this.devFrameMsAverage += (elapsed - this.devFrameMsAverage) / Math.min(this.devFrameSamples, 240);
+        this.devFrameMsMax = Math.max(this.devFrameMsMax, elapsed);
+      }
+      this.trackAutoQuality(elapsed);
     }
   };
+
+  /**
+   * Phase 10C — engage the lighter cosmetic tier after ~0.75 s of sustained
+   * expensive frames, release it after ~15 s of clear headroom. Only runs in
+   * 'auto' quality, only while playing, and skips the first two seconds (JIT
+   * warm-up and level loads read as slow frames that are not real load).
+   */
+  private trackAutoQuality(elapsed: number): void {
+    if (this.graphicsQuality !== 'auto' || this.status !== 'playing') return;
+    if (this.frameCostSamples < 120) return;
+    if (!this.autoDegraded) {
+      if (elapsed > AUTO_QUALITY_SLOW_MS) {
+        this.slowFrameStreak += 1;
+        this.fastFrameStreak = 0;
+        if (this.slowFrameStreak >= 45) {
+          this.autoDegraded = true;
+          this.slowFrameStreak = 0;
+          this.handleResize();
+        }
+      } else {
+        this.slowFrameStreak = 0;
+      }
+    } else if (elapsed < AUTO_QUALITY_FAST_MS) {
+      this.fastFrameStreak += 1;
+      if (this.fastFrameStreak >= 900) {
+        this.autoDegraded = false;
+        this.fastFrameStreak = 0;
+        this.handleResize();
+      }
+    } else {
+      this.fastFrameStreak = 0;
+    }
+  }
 
   private lastNight = 0;
   /**
@@ -1813,9 +1885,13 @@ export class SnowGameEngine {
   private collectPickups(run: RunState, delta: number): void {
     const rider = run.rider;
     const riderCoreY = rider.y - 21;
-    run.objects = run.objects.filter((object) => {
+    // Phase 10C — compact in place instead of rebuilding the obstacle array
+    // every frame; POWER membership comes from a precomputed set.
+    const objects = run.objects;
+    let keep = 0;
+    const collect = (object: Obstacle): boolean => {
       const isCoin = object.kind === 'coin';
-      const power = POWER_ORDER.find((kind) => kind === object.kind);
+      const power = POWER_KINDS.has(object.kind) ? object.kind as PowerKind : null;
       if (!isCoin && !power) return true;
 
       const x = object.pulled?.x ?? object.x;
@@ -1851,7 +1927,15 @@ export class SnowGameEngine {
       }
       this.emit({ type: 'coin' });
       return false;
-    });
+    };
+    for (let index = 0; index < objects.length; index += 1) {
+      const object = objects[index];
+      if (collect(object)) {
+        objects[keep] = object;
+        keep += 1;
+      }
+    }
+    objects.length = keep;
   }
 
   private checkCollision(run: RunState): boolean {
@@ -2043,6 +2127,7 @@ export class SnowGameEngine {
 
     for (let index = 0; index < bursts; index += 1) {
       for (const axle of WHEEL_AXLES) {
+        if (run.particles.length >= MAX_PARTICLES) return;
         // Snow leaves the lower rear quadrant along the tire's tangent.
         const angle = 0.2 + Math.random() * 0.5;
         const localX = (axle - WHEEL_RADIUS * Math.sin(angle)) * BIKE_SCALE;
@@ -2102,25 +2187,59 @@ export class SnowGameEngine {
         }
       }
     }
-    run.particles = run.particles.filter((particle) => {
-      particle.life -= delta;
-      particle.x += particle.vx * delta;
-      particle.y += particle.vy * delta;
-      particle.vy += 250 * delta;
-      if (particle.wheelSnow && particle.vy > 0 && particle.y >= this.terrainAt(particle.x) && !this.gapAt(run, particle.x)) {
-        return false;
+    // Phase 10C — particles, trail and popups compact in place. The old
+    // .filter() rebuilt all three arrays every frame (three allocations per
+    // frame feeding the GC); the write-index compaction below is allocation
+    // free and keeps identical ordering semantics.
+    // Phase 10C — particles, trail and popups compact in place. The old
+    // .filter() rebuilt all three arrays every frame (three allocations per
+    // frame feeding the GC); the write-index compaction below is allocation
+    // free and keeps identical ordering semantics.
+    {
+      const particles = run.particles;
+      let keep = 0;
+      for (let index = 0; index < particles.length; index += 1) {
+        const particle = particles[index];
+        particle.life -= delta;
+        particle.x += particle.vx * delta;
+        particle.y += particle.vy * delta;
+        particle.vy += 250 * delta;
+        const settled = particle.wheelSnow && particle.vy > 0 && particle.y >= this.terrainAt(particle.x) && !this.gapAt(run, particle.x);
+        if (particle.life > 0 && !settled) {
+          particles[keep] = particle;
+          keep += 1;
+        }
       }
-      return particle.life > 0;
-    });
-    run.trail.forEach((point) => { point.age += delta; });
-    run.trail = run.trail.filter((point) => point.age < 0.48);
-    run.popups.forEach((popup) => { popup.life -= delta; popup.y -= 19 * delta; });
-    run.popups = run.popups.filter((popup) => popup.life > 0);
+      particles.length = keep;
+      const trail = run.trail;
+      let trailKeep = 0;
+      for (let index = 0; index < trail.length; index += 1) {
+        const point = trail[index];
+        point.age += delta;
+        if (point.age < 0.48) {
+          trail[trailKeep] = point;
+          trailKeep += 1;
+        }
+      }
+      trail.length = trailKeep;
+      const popups = run.popups;
+      let popupKeep = 0;
+      for (let index = 0; index < popups.length; index += 1) {
+        const popup = popups[index];
+        popup.life -= delta;
+        popup.y -= 19 * delta;
+        if (popup.life > 0) {
+          popups[popupKeep] = popup;
+          popupKeep += 1;
+        }
+      }
+      popups.length = popupKeep;
+    }
     run.shake *= Math.exp(-7.5 * delta);
   }
 
   private burst(run: RunState, x: number, y: number, amount: number, color: string, force: number, lift: number): void {
-    for (let index = 0; index < amount; index += 1) {
+    for (let index = 0; index < amount && run.particles.length < MAX_PARTICLES; index += 1) {
       const angle = this.nextRandom(run) * TAU;
       const velocity = force * (0.25 + this.nextRandom(run) * 0.75);
       run.particles.push({
@@ -2711,6 +2830,10 @@ export class SnowGameEngine {
 
   /** Phase 10A — reused terrain scanline buffer: no per-frame point allocations. */
   private terrainSegment: Array<{ x: number; y: number }> = [];
+  /** Phase 10C — cached coin halo gradient (paint-time user space). */
+  private coinHalo: CanvasGradient | null = null;
+  /** The context that created the cached halo (gradients are per-context). */
+  private coinHaloFor: CanvasRenderingContext2D | null = null;
 
   private drawTerrain(
     context: CanvasRenderingContext2D,
@@ -2723,6 +2846,17 @@ export class SnowGameEngine {
     const step = this.lighterGraphics ? 12 : 9;
     const segment = this.terrainSegment;
     let segmentLength = 0;
+    // Phase 10C — the ground gradient and crest colours depend only on the
+    // palette and viewport, which are fixed within a frame, so every terrain
+    // chunk fill in this frame shares one set (previously one gradient +
+    // colour mix per chunk).
+    const ground = context.createLinearGradient(0, height * 0.54, 0, height);
+    ground.addColorStop(0, palette.snow);
+    ground.addColorStop(0.55, colorMix(palette.snow, palette.snowShade, 0.44));
+    ground.addColorStop(1, palette.snowShade);
+    const crestBase = colorMix(palette.snow, '#ffffff', 0.5);
+    const crest = colorMix(crestBase, '#c9e2f8', palette.night * 0.55);
+    const crestStyle = alphaColor(crest, Math.min(1, 0.9 + palette.night * 0.07));
     const push = (x: number, y: number) => {
       const point = segment[segmentLength] ?? (segment[segmentLength] = { x: 0, y: 0 });
       point.x = x;
@@ -2735,10 +2869,6 @@ export class SnowGameEngine {
         return;
       }
 
-      const ground = context.createLinearGradient(0, height * 0.54, 0, height);
-      ground.addColorStop(0, palette.snow);
-      ground.addColorStop(0.55, colorMix(palette.snow, palette.snowShade, 0.44));
-      ground.addColorStop(1, palette.snowShade);
       context.beginPath();
       context.moveTo(segment[0].x, segment[0].y);
       for (let index = 0; index < segmentLength; index += 1) context.lineTo(segment[index].x, segment[index].y);
@@ -2753,9 +2883,7 @@ export class SnowGameEngine {
       for (let index = 0; index < segmentLength; index += 1) context.lineTo(segment[index].x, segment[index].y);
       // Phase 10A — at night the crest picks up a cool moonlit rim so the
       // silhouette (and any hazard resting on it) stays readable.
-      const crestBase = colorMix(palette.snow, '#ffffff', 0.5);
-      const crest = colorMix(crestBase, '#c9e2f8', palette.night * 0.55);
-      context.strokeStyle = alphaColor(crest, Math.min(1, 0.9 + palette.night * 0.07));
+      context.strokeStyle = crestStyle;
       context.lineWidth = 2.4;
       context.lineJoin = 'round';
       context.stroke();
@@ -2827,10 +2955,20 @@ export class SnowGameEngine {
         context.translate(x, y);
         context.scale(spin, 1);
         if (!this.lighterGraphics) {
-          const halo = context.createRadialGradient(0, 0, 1, 0, 0, 22);
-          halo.addColorStop(0, 'rgba(255,221,154,0.33)');
-          halo.addColorStop(1, 'rgba(255,221,154,0)');
-          context.fillStyle = halo;
+          // Phase 10C — the halo gradient is defined around the coin's local
+          // origin and is painted under the coin's own transform (canvas
+          // gradients resolve in user space at paint time), so one cached
+          // gradient serves every coin instead of one per coin per frame.
+          // The cache is keyed to the drawing context so a gradient created
+          // by one context is never handed to another.
+          if (this.coinHaloFor !== context) {
+            const halo = context.createRadialGradient(0, 0, 1, 0, 0, 22);
+            halo.addColorStop(0, 'rgba(255,221,154,0.33)');
+            halo.addColorStop(1, 'rgba(255,221,154,0)');
+            this.coinHalo = halo;
+            this.coinHaloFor = context;
+          }
+          context.fillStyle = this.coinHalo!;
           context.beginPath();
           context.arc(0, 0, 22, 0, TAU);
           context.fill();
@@ -3582,10 +3720,17 @@ export class SnowGameEngine {
   }
 
   private drawParticles(context: CanvasRenderingContext2D, run: RunState, cameraX: number): void {
+    // Phase 10C — style parsing is per-assignment cost on real canvases, so
+    // only set fillStyle when the colour actually changes (bursts and wheel
+    // spray run in colour runs).
+    let lastColor = '';
     for (const particle of run.particles) {
       const alpha = clamp(particle.life / particle.maxLife, 0, 1);
       context.globalAlpha = alpha;
-      context.fillStyle = particle.color;
+      if (particle.color !== lastColor) {
+        context.fillStyle = particle.color;
+        lastColor = particle.color;
+      }
       context.beginPath();
       context.arc(particle.x - cameraX, particle.y, particle.size * (0.45 + alpha * 0.55), 0, TAU);
       context.fill();
