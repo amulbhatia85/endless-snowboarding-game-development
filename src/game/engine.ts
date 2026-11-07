@@ -1524,7 +1524,10 @@ export class SnowGameEngine {
       this.stepLevelScene(run, delta);
       return;
     }
-    run.distance = rider.x;
+    // Phase 11 — distance is monotonic within an attempt: the chasm-lip
+    // back-clamp below can pull rider.x behind the furthest point reached,
+    // and a regressing distance would make the next score sync non-cumulative.
+    run.distance = Math.max(run.distance, rider.x);
     // Phase 10B — detect powers that expired since the last riding frame.
     this.trackPowerCues(run);
     if (run.elapsed < START_PAUSE) {
@@ -1633,7 +1636,7 @@ export class SnowGameEngine {
 
     if (run.over) return;
 
-    run.distance = rider.x;
+    run.distance = Math.max(run.distance, rider.x);
     this.collectPickups(run, delta);
     if (!run.missionComplete && this.missionProgress(run) >= run.mission.target) {
       run.missionComplete = true;
@@ -2042,7 +2045,10 @@ export class SnowGameEngine {
     run.over = true;
     run.crashReason = reason;
     run.crashesThisLevel += 1;
-    run.distance = run.rider.x;
+    // Phase 11 — keep the pre-clamp distance: a chasm fall clamps rider.x
+    // back to the lip, but the rider had already reached the further x, and
+    // the score ledger only accepts non-decreasing runScores.
+    run.distance = Math.max(run.distance, run.rider.x);
     // Phase 10B — no expiration cues across the crash/revive/restart flow.
     this.powerCueState = [];
     // Phase 8 — a brief, purely cosmetic tumble: the rider pops over the
