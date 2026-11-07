@@ -135,7 +135,7 @@ test('auto-quality: warmup ignores slow frames for the first 120 samples', () =>
   const game = makeEngine();
   game.setGraphicsQuality('auto');
   game.frameCostSamples = 0;
-  for (let index = 0; index < 200; index += 1) game.trackAutoQuality(AUTO_QUALITY_SLOW_MS + 5);
+  for (let index = 0; index < 200; index += 1) game.trackAutoQuality(AUTO_QUALITY_SLOW_MS + 5, 16.7);
   assert.equal(game.autoQualityDegraded, false, 'no degradation during warmup');
 });
 
@@ -143,9 +143,9 @@ test('auto-quality: engages after 45 consecutive slow frames, not before', () =>
   const game = makeEngine();
   game.setGraphicsQuality('auto');
   game.frameCostSamples = 200;
-  for (let index = 0; index < 44; index += 1) game.trackAutoQuality(AUTO_QUALITY_SLOW_MS + 5);
+  for (let index = 0; index < 44; index += 1) game.trackAutoQuality(AUTO_QUALITY_SLOW_MS + 5, 16.7);
   assert.equal(game.autoQualityDegraded, false, '44 slow frames are not enough');
-  game.trackAutoQuality(AUTO_QUALITY_SLOW_MS + 5);
+  game.trackAutoQuality(AUTO_QUALITY_SLOW_MS + 5, 16.7);
   assert.equal(game.autoQualityDegraded, true, '45th slow frame engages the lighter tier');
 });
 
@@ -153,9 +153,9 @@ test('auto-quality: a single fast frame resets the slow streak', () => {
   const game = makeEngine();
   game.setGraphicsQuality('auto');
   game.frameCostSamples = 200;
-  for (let index = 0; index < 44; index += 1) game.trackAutoQuality(AUTO_QUALITY_SLOW_MS + 5);
-  game.trackAutoQuality(AUTO_QUALITY_FAST_MS - 1);
-  game.trackAutoQuality(AUTO_QUALITY_SLOW_MS + 5);
+  for (let index = 0; index < 44; index += 1) game.trackAutoQuality(AUTO_QUALITY_SLOW_MS + 5, 16.7);
+  game.trackAutoQuality(AUTO_QUALITY_FAST_MS - 1, 16.7);
+  game.trackAutoQuality(AUTO_QUALITY_SLOW_MS + 5, 16.7);
   assert.equal(game.autoQualityDegraded, false, 'streak restarted, so one more slow frame does not engage');
 });
 
@@ -163,15 +163,15 @@ test('auto-quality: releases after 900 consecutive fast frames only', () => {
   const game = makeEngine();
   game.setGraphicsQuality('auto');
   game.frameCostSamples = 200;
-  for (let index = 0; index < 45; index += 1) game.trackAutoQuality(AUTO_QUALITY_SLOW_MS + 5);
+  for (let index = 0; index < 45; index += 1) game.trackAutoQuality(AUTO_QUALITY_SLOW_MS + 5, 16.7);
   assert.equal(game.autoQualityDegraded, true);
-  for (let index = 0; index < 899; index += 1) game.trackAutoQuality(AUTO_QUALITY_FAST_MS - 1);
+  for (let index = 0; index < 899; index += 1) game.trackAutoQuality(AUTO_QUALITY_FAST_MS - 1, 16.7);
   assert.equal(game.autoQualityDegraded, true, '899 fast frames are not enough to release');
   // An intermediate frame (between FAST_MS and SLOW_MS) resets the fast streak.
-  game.trackAutoQuality(13);
-  for (let index = 0; index < 899; index += 1) game.trackAutoQuality(AUTO_QUALITY_FAST_MS - 1);
+  game.trackAutoQuality(13, 16.7);
+  for (let index = 0; index < 899; index += 1) game.trackAutoQuality(AUTO_QUALITY_FAST_MS - 1, 16.7);
   assert.equal(game.autoQualityDegraded, true, 'streak was reset by the intermediate frame');
-  game.trackAutoQuality(AUTO_QUALITY_FAST_MS - 1);
+  game.trackAutoQuality(AUTO_QUALITY_FAST_MS - 1, 16.7);
   assert.equal(game.autoQualityDegraded, false, '900 consecutive fast frames release the lighter tier');
 });
 
@@ -179,7 +179,7 @@ test('auto-quality: manual quality choice resets the adaptation', () => {
   const game = makeEngine();
   game.setGraphicsQuality('auto');
   game.frameCostSamples = 200;
-  for (let index = 0; index < 45; index += 1) game.trackAutoQuality(AUTO_QUALITY_SLOW_MS + 5);
+  for (let index = 0; index < 45; index += 1) game.trackAutoQuality(AUTO_QUALITY_SLOW_MS + 5, 16.7);
   assert.equal(game.autoQualityDegraded, true);
   game.setGraphicsQuality('auto');
   assert.equal(game.autoQualityDegraded, false, 're-choosing auto resets the degradation');
@@ -189,7 +189,7 @@ test('auto-quality: never engages for a fixed quality tier', () => {
   const game = makeEngine();
   game.setGraphicsQuality('high');
   game.frameCostSamples = 200;
-  for (let index = 0; index < 100; index += 1) game.trackAutoQuality(AUTO_QUALITY_SLOW_MS + 20);
+  for (let index = 0; index < 100; index += 1) game.trackAutoQuality(AUTO_QUALITY_SLOW_MS + 20, 16.7);
   assert.equal(game.autoQualityDegraded, false, 'high tier ignores slow frames');
 });
 
@@ -294,4 +294,65 @@ test('coin halo: cached gradient is keyed to the drawing context', () => {
     }
   }
   assert.ok(b.fillStyles.includes(bGradients[0]), 'context B painted its own gradient');
+});
+
+test('auto-quality 10D: sustained missed frame pacing engages the lighter tier with fast engine work', () => {
+  const game = makeEngine();
+  game.setGraphicsQuality('auto');
+  // Engine work is fast (2ms) but frames are delivered at 40ms — the
+  // GPU/compositing pressure the engine-side number alone cannot see.
+  game.frameCostSamples = 200;
+  for (let index = 0; index < 44; index += 1) game.trackAutoQuality(2, 40);
+  assert.equal(game.autoQualityDegraded, false, '44 missed frames are not enough');
+  game.trackAutoQuality(2, 40);
+  assert.equal(game.autoQualityDegraded, true, '45 consecutive missed frames engage the lighter tier');
+});
+
+test('auto-quality 10D: pacing signal flows through frame() itself', () => {
+  const game = makeEngine({ save: seedSave(999999, 30) });
+  game.setGraphicsQuality('auto');
+  const run = game.run;
+  assert.ok(run, 'run exists');
+  // Invulnerable + gap-jumping ride so a 40ms-sim-step run survives long enough.
+  const HAZ = ['rock', 'log', 'tree', 'gap', 'ramp', 'swinging-log', 'root', 'fence', 'ice', 'icicle', 'snowball', 'branch'];
+  run.invulnerableUntil = run.elapsed + 9999;
+  run.rider.speed = 475;
+  let degradedAt = -1;
+  for (let index = 0; index < 260 && degradedAt < 0; index += 1) {
+    const x = run.rider.x;
+    const danger = run.objects.find((o) => {
+      if (o.kind === 'coin' || o.kind === 'ice' || o.bridged) return false;
+      if (o.kind === 'gap') return o.x > x + 60 && o.x < x + 240;
+      return HAZ.includes(o.kind) && o.x > x + 80 && o.x < x + 190;
+    });
+    if (danger) { game.jumpQueued = true; }
+    game.frame(8000 + index * 40); // 40ms frames: engine work is tiny, pacing is slow
+    if (game.autoQualityDegraded) degradedAt = index;
+  }
+  assert.ok(degradedAt >= 0, 'auto-quality engaged through the frame() pacing path');
+  assert.ok(degradedAt >= 120, 'warmup of 120 samples was respected');
+});
+
+test('auto-quality 10D: a device that keeps missing frames never releases the lighter tier', () => {
+  const game = makeEngine();
+  game.setGraphicsQuality('auto');
+  game.frameCostSamples = 200;
+  for (let index = 0; index < 45; index += 1) game.trackAutoQuality(2, 40);
+  assert.equal(game.autoQualityDegraded, true);
+  // Engine work is fast, but frames still arrive at 33ms (30fps device).
+  for (let index = 0; index < 2000; index += 1) game.trackAutoQuality(2, 33);
+  assert.equal(game.autoQualityDegraded, true, 'no release while frames keep missing');
+  // Frame pacing recovers to 60fps: release after 900 healthy frames.
+  for (let index = 0; index < 899; index += 1) game.trackAutoQuality(2, 16.7);
+  assert.equal(game.autoQualityDegraded, true, '899 fast frames are not enough');
+  game.trackAutoQuality(2, 16.7);
+  assert.equal(game.autoQualityDegraded, false, '900 healthy frames release the lighter tier');
+});
+
+test('auto-quality 10D: a healthy 50 Hz display (20ms frames) never engages', () => {
+  const game = makeEngine();
+  game.setGraphicsQuality('auto');
+  game.frameCostSamples = 200;
+  for (let index = 0; index < 500; index += 1) game.trackAutoQuality(2, 20);
+  assert.equal(game.autoQualityDegraded, false, '20ms frames are within the missed-frame budget');
 });

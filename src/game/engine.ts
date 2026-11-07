@@ -297,6 +297,12 @@ const MAX_PARTICLES = 400;
 const AUTO_QUALITY_SLOW_MS = 18;
 const AUTO_QUALITY_FAST_MS = 10;
 /**
+ * Phase 10D — end-to-end frame gaps above this count as a missed frame for
+ * the auto-quality adaptation (a healthy 50 Hz display runs at 20 ms, a 60 Hz
+ * display at 16.7 ms; 25 ms means the page is rendering below ~40 fps).
+ */
+const AUTO_QUALITY_MISSED_MS = 25;
+/**
  * Phase 10A — canvas text now speaks the same typography as the DOM shell
  * ("Avenir Next", Avenir, "Segoe UI") so popups, warnings and icons never
  * clash with the surrounding interface.
@@ -517,7 +523,7 @@ export class SnowGameEngine {
     }
   };
 
-  constructor(canvas: HTMLCanvasElement, callbacks: EngineCallbacks, private readonly android = false) {
+  constructor(canvas: HTMLCanvasElement, callbacks: EngineCallbacks, private readonly android = false, devTools = true) {
     const context = canvas.getContext('2d', { alpha: false });
     if (!context) throw new Error('Canvas 2D is not available in this browser.');
 
@@ -525,16 +531,20 @@ export class SnowGameEngine {
     this.context = context;
     this.callbacks = callbacks;
     const parameters = new URLSearchParams(window.location?.search ?? '');
+    // Phase 10D — developer URL parameters (?dev, ?level, ?debugObstacles)
+    // are honoured only when the shell passes devTools (development builds
+    // and the test harness do; the production bundle does not).
+    const devParameters = devTools ? parameters : new URLSearchParams();
     // ?debugObstacles=1 keeps the obstacle overlay; ?dev=1 (the developer
     // mode that also shows the level selector in the shell) enables it too.
-    this.obstacleDebug = parameters.get('debugObstacles') === '1' || parameters.get('dev') === '1';
+    this.obstacleDebug = devParameters.get('debugObstacles') === '1' || devParameters.get('dev') === '1';
     // Local preview hook: ?level=N starts straight at that level (progress is
     // kept in memory only so real saves are never touched). ?dev=1 sandboxes
     // the entire developer session the same way — the level selector and any
     // play from a dev URL can never write to saved progression.
-    const previewLevel = Number(parameters.get('level'));
+    const previewLevel = Number(devParameters.get('level'));
     const preview = Number.isSafeInteger(previewLevel) && previewLevel >= 1 && previewLevel <= 9999;
-    const sandbox = preview || parameters.get('dev') === '1';
+    const sandbox = preview || devParameters.get('dev') === '1';
     const previewStorage = sandbox
       ? (() => {
         const values = new Map<string, string>();
@@ -1045,7 +1055,11 @@ export class SnowGameEngine {
     // Phase 10C — the engine's own work is now always timed (it feeds the
     // measured auto-quality adaptation); the dev overlay reads the same EMA.
     const devStarted = performance.now();
-    const delta = this.lastFrame === 0 ? 0 : clamp((timestamp - this.lastFrame) / 1000, 0, 0.1);
+    // Phase 10D — the raw frame gap (before clamping) is kept for the
+    // auto-quality adaptation: end-to-end rAF spacing is the only signal that
+    // sees GPU/compositing pressure the engine-side work number cannot.
+    const rawGap = this.lastFrame === 0 ? 0 : timestamp - this.lastFrame;
+    const delta = this.lastFrame === 0 ? 0 : clamp(rawGap / 1000, 0, 0.1);
     this.lastFrame = timestamp;
 
     if (this.status === 'playing' && this.run) {
@@ -1136,7 +1150,7 @@ export class SnowGameEngine {
         this.devFrameMsAverage += (elapsed - this.devFrameMsAverage) / Math.min(this.devFrameSamples, 240);
         this.devFrameMsMax = Math.max(this.devFrameMsMax, elapsed);
       }
-      this.trackAutoQuality(elapsed);
+      this.trackAutoQuality(elapsed, rawGap);
     }
   };
 
@@ -1146,11 +1160,18 @@ export class SnowGameEngine {
    * 'auto' quality, only while playing, and skips the first two seconds (JIT
    * warm-up and level loads read as slow frames that are not real load).
    */
-  private trackAutoQuality(elapsed: number): void {
+  private trackAutoQuality(elapsed: number, frameGapMs: number): void {
     if (this.graphicsQuality !== 'auto' || this.status !== 'playing') return;
     if (this.frameCostSamples < 120) return;
+    // Phase 10D — a frame counts as slow when either the engine's own work
+    // misses its budget or the end-to-end frame gap shows the browser missed
+    // vsync badly (GPU/compositing pressure is invisible to the engine-side
+    // number alone). A frame only counts as fast when BOTH are healthy, so a
+    // device that keeps missing frames never releases the lighter tier.
+    const slow = elapsed > AUTO_QUALITY_SLOW_MS || frameGapMs > AUTO_QUALITY_MISSED_MS;
+    const fast = elapsed < AUTO_QUALITY_FAST_MS && frameGapMs <= AUTO_QUALITY_MISSED_MS;
     if (!this.autoDegraded) {
-      if (elapsed > AUTO_QUALITY_SLOW_MS) {
+      if (slow) {
         this.slowFrameStreak += 1;
         this.fastFrameStreak = 0;
         if (this.slowFrameStreak >= 45) {
@@ -1161,7 +1182,7 @@ export class SnowGameEngine {
       } else {
         this.slowFrameStreak = 0;
       }
-    } else if (elapsed < AUTO_QUALITY_FAST_MS) {
+    } else if (fast) {
       this.fastFrameStreak += 1;
       if (this.fastFrameStreak >= 900) {
         this.autoDegraded = false;

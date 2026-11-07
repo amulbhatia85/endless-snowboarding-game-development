@@ -31,6 +31,8 @@ interface ScoreEntry {
 const IS_ANDROID = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
 
 const SCORE_KEY = 'afterglow-snow-scores-v1';
+/** Phase 10D — release version shown in Settings (single source of truth). */
+const APP_VERSION = '1.0.0';
 
 const emptyHud: HudSnapshot = { score: 0, distance: 0, speedKmh: 0, coins: 0, combo: 0, elapsed: 0, powers: [] };
 
@@ -148,7 +150,10 @@ const MILESTONES = [500, 1000, 2500, 5000, 10000, 20000];
 // Phase 5A audit tool: `?dev=1` reveals the developer level selector (levels
 // 1–4, in-memory only — saved progression is never touched) and the engine's
 // diagnostics overlay. Purely a testing aid; invisible in normal play.
-const DEV_MODE = typeof window !== 'undefined'
+// Phase 10D: developer URL parameters are only honoured in development
+// builds — the production bundle ignores them entirely.
+const DEV_MODE = import.meta.env.DEV
+  && typeof window !== 'undefined'
   && new URLSearchParams(window.location.search).get('dev') === '1';
 const DEV_LEVELS: { level: number; label: string }[] = [
   { level: 1, label: 'Green Hills' },
@@ -378,7 +383,7 @@ export default function App() {
         if (newRecord && previous.length > 0 && !runRef.current.recordAnnounced) audio.recordCue();
         void ads.prepareInterstitial();
       },
-    }, IS_ANDROID);
+    }, IS_ANDROID, import.meta.env.DEV);
 
     engineRef.current = engine;
     setHasParkedRun(engine.hasParkedRun);
@@ -1318,7 +1323,7 @@ export default function App() {
                     <button onClick={() => { audio.click(); void ads.showPrivacyOptions(); }}>Ad privacy choices <span>›</span></button>
                   )}
                 </div>
-                <p className="settings-version">Afterglow · Shadows Game Studio · Offline play supported</p>
+                <p className="settings-version">Afterglow v{APP_VERSION} · Shadows Game Studio · Offline play supported</p>
               </>
             )}
 
