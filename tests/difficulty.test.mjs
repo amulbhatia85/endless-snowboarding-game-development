@@ -262,7 +262,9 @@ test('Pacing enforces spacing, reaction and danger recovery budgets', () => {
   const pacing = manager.directive({ level, progress: 0.85, terrainComplexity: 0 });
   state.directive = { ...directive({ recoveryChance: 0 }), ...pacing };
   state.recentPatterns = [];
-  const reactionDistance = Math.max(BICYCLE_PHYSICS.maxSpeed, 250 + 10 * (1000 / 250)) * pacing.reactionSeconds;
+  // Phase 11 — the corridor is speed-projected off the rider's approach
+  // (floor 300) instead of always assuming sprint speed.
+  const reactionDistance = Math.max(300, 250 + 10 * (1000 / 250)) * pacing.reactionSeconds;
   let dangerous = null;
   let mild = null;
   for (let candidate = 800; candidate < 15_000; candidate += 307) {
@@ -314,7 +316,9 @@ test('Paced sequences stay physically achievable across levels, seeds and zones'
         }
         for (const obstacle of plan.obstacles) {
           assert.equal(validPlacementMetadata(obstacle.plan), true);
-          assert.ok(obstacle.plan.warningStart <= obstacle.plan.takeoff.start - 450, 'reaction floor holds');
+          // Phase 11 — the corridor buys a constant reaction time at any
+          // approach speed (max(300, projected) × reactionSeconds).
+          assert.ok(obstacle.plan.warningStart <= obstacle.plan.takeoff.start - 300, 'reaction floor holds');
         }
       }
     }
@@ -329,8 +333,11 @@ test('The engine paces real runs and keeps the final approach safe', () => {
   const game = makeEngine(seedSave(4242, 12));
   game.start();
   const run = game.run;
-  assert.ok(Array.isArray(run.recentPatterns) && run.recentPatterns.length <= 8
-    && run.recentPatterns.every((id) => OBSTACLE_PATTERNS.some((pattern) => pattern.id === id)),
+  // Phase 11 — recovery slots join the repetition memory (bounded by the
+  // directive's recentPatternMemory, default 10) so empty stretches count.
+  assert.ok(Array.isArray(run.recentPatterns) && run.recentPatterns.length <= 10
+    && run.recentPatterns.every((id) => id === 'recovery'
+      || OBSTACLE_PATTERNS.some((pattern) => pattern.id === id)),
     'the pacing memory starts as a bounded list of valid pattern ids');
 
   // 45k+ → safe approach: injected dangerous hazards beyond the visible edge
@@ -359,8 +366,9 @@ test('The engine paces real runs and keeps the final approach safe', () => {
     assert.ok(!run.objects.some((object) => dangerousKinds(object) && object.x > run.rider.x + 900),
       'the approach never regenerates dangerous hazards');
   }
-  assert.ok(run.recentPatterns.length <= 8);
-  assert.ok(run.recentPatterns.every((id) => OBSTACLE_PATTERNS.some((pattern) => pattern.id === id)));
+  assert.ok(run.recentPatterns.length <= 10);
+  assert.ok(run.recentPatterns.every((id) => id === 'recovery'
+    || OBSTACLE_PATTERNS.some((pattern) => pattern.id === id)));
 
   // Control: at ~38k (main-challenge crest, pre-approach) dangerous patterns flow.
   const control = makeEngine(seedSave(4242, 12));

@@ -387,9 +387,22 @@ test('Transitions work across levels and procedural seeds', () => {
     assert.equal(game.levels.levelScore, 0);
     assert.deepEqual(orderedPhases(telemetry.phases), ['approach', 'entering', 'celebrating', 'exiting', 'riding']);
     // The new level plays: terrain under the rider, generation ahead, physics bounded.
+    // Phase 11 — level openings now guarantee early gameplay, so the rider
+    // responds to it like any player would instead of idling into the first
+    // hazard.
     const run = game.run;
     let timestamp = 16;
     for (let frame = 0; frame < 240; frame += 1) {
+      if (run.rider.grounded) {
+        const x = run.rider.x;
+        const danger = run.objects.find((object) => {
+          if (object.kind === 'coin' || object.kind === 'ice' || object.bridged) return false;
+          if (object.kind === 'gap') return !object.bridged && object.x > x + 60 && object.x < x + 240;
+          return ['rock', 'tree', 'log', 'gap', 'ramp', 'swinging-log', 'root', 'fence', 'icicle', 'snowball', 'branch']
+            .includes(object.kind) && object.x > x + 80 && object.x < x + 190;
+        });
+        if (danger) game.jumpQueued = true;
+      }
       game.frame(timestamp);
       timestamp += 1000 / 60;
       assert.ok(Number.isFinite(run.rider.x) && Number.isFinite(run.rider.y));

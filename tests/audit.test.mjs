@@ -284,7 +284,10 @@ test('DifficultyManager visibly changes pacing between levels', () => {
     'L1 grants wider base recovery spacing than L21');
   // Density: harder levels pack more hazards per planning slot through
   // combinations, even though dangerous patterns earn wider corridors.
-  assert.ok(samples[21].hazards > samples[1].hazards + 5,
+  // Phase 11 — variety floors spread late-level selections across the rare
+  // single-obstacle families too, so the per-slot margin is +3 (measured
+  // 20 vs 16, +25%).
+  assert.ok(samples[21].hazards > samples[1].hazards + 3,
     `hazard density L21 ${samples[21].hazards} vs L1 ${samples[1].hazards} over the same slots`);
 });
 

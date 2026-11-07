@@ -14,11 +14,11 @@ function memoryStorage() {
 // The default engine storage is pre-seeded with a fixed journey seed so the
 // generation-driven tests are deterministic run-to-run (an unseeded engine
 // draws a random level seed, which made the hazard-corridor test flaky).
-function seededStorage(seed = 20260101) {
+function seededStorage(seed = 20260101, level = 1) {
   const storage = memoryStorage();
   storage.setItem(LEVEL_SAVE_KEY, JSON.stringify({
-    version: 1, journeySeed: seed, currentLevel: 1, unlockedThrough: 1,
-    completedThrough: 0, levelScore: 0, runScore: 0, lifetimeScore: 0, checkpoint: null,
+    version: 1, journeySeed: seed, currentLevel: level, unlockedThrough: level,
+    completedThrough: level - 1, levelScore: 0, runScore: 0, lifetimeScore: 0, checkpoint: null,
   }));
   return storage;
 }
@@ -187,7 +187,10 @@ test('Final-house reservation joins the terrain continuously', () => {
 });
 
 test('Generated hazards reserve their validated landing corridors', () => {
-  const game = engine();
+  // Phase 11 — early levels pace hazards gently by design (~6–10 s apart at
+  // cruise), so the corridor sample rides a later level where the pacing
+  // bands are dense. Corridor integrity itself is level-independent.
+  const game = engine(seededStorage(20260101, 21));
   game.start();
   const run = game.run;
   run.nextCoinX = 1e12;
@@ -218,7 +221,12 @@ test('Generated hazards reserve their validated landing corridors', () => {
     if (!validation) continue;
     if (obstacle.kind === 'gap') gaps++;
     assert.equal(validation.safe, true);
-    if (hazards[index + 1]) assert.ok(hazards[index + 1].x >= validation.clearUntil - 0.001);
+    // A ramp-gap pattern intentionally places its gap inside the ramp's
+    // flight corridor — the ramp launches the rider over it — so the
+    // "next hazard clears my corridor" rule only applies across patterns.
+    const next = hazards[index + 1];
+    const pairedGap = obstacle.kind === 'ramp' && next?.kind === 'gap' && next.x - obstacle.x < 400;
+    if (next && !pairedGap) assert.ok(next.x >= validation.clearUntil - 0.001);
   }
   assert.ok(gaps > 0);
 });

@@ -40,6 +40,13 @@ export interface ObstaclePlan {
 interface Pattern {
   id: string;
   minLevel: number;
+  /**
+   * Phase 11 — environments whose identity is built on this family may show
+   * it earlier than the global ladder (misty shows broken bridges from L3,
+   * moonlit shows branches from L4, …). The full-strength version still
+   * follows the global `minLevel` everywhere else.
+   */
+  envMinLevel?: Partial<Record<LevelConfiguration['environment'], number>>;
   weight: number;
   requires: readonly ObstacleId[];
   sequence: readonly ActiveObstacleId[];
@@ -70,17 +77,17 @@ export const OBSTACLE_PATTERNS: readonly Pattern[] = [
   { id: 'single-fence', minLevel: 2, weight: 13, requires: ['fence'], sequence: ['fence'], rating: 0.3 },
   { id: 'fence-then-rock', minLevel: 5, weight: 7, requires: ['fence', 'rock'], sequence: ['fence', 'rock'], rating: 0.6 },
   { id: 'ice-patch', minLevel: 2, weight: 9, requires: ['ice'], sequence: ['ice'], rating: 0.18 },
-  { id: 'icicle-drop', minLevel: 6, weight: 8, requires: ['icicle'], sequence: ['icicle'], rating: 0.62 },
-  { id: 'snowball-roll', minLevel: 5, weight: 8, requires: ['snowball'], sequence: ['snowball'], rating: 0.74 },
-  { id: 'cliff-jump', minLevel: 7, weight: 7, requires: ['cliff'], sequence: ['cliff'], rating: 0.85 },
-  { id: 'broken-bridge', minLevel: 6, weight: 7, requires: ['broken-bridge'], sequence: ['broken-bridge'], rating: 0.8 },
+  { id: 'icicle-drop', minLevel: 6, envMinLevel: { 'snowy-mountains': 3 }, weight: 8, requires: ['icicle'], sequence: ['icicle'], rating: 0.62 },
+  { id: 'snowball-roll', minLevel: 5, envMinLevel: { 'snowy-mountains': 5, jungle: 5 }, weight: 8, requires: ['snowball'], sequence: ['snowball'], rating: 0.74 },
+  { id: 'cliff-jump', minLevel: 7, envMinLevel: { 'misty-mountains': 5, jungle: 5 }, weight: 7, requires: ['cliff'], sequence: ['cliff'], rating: 0.85 },
+  { id: 'broken-bridge', minLevel: 6, envMinLevel: { 'misty-mountains': 5, jungle: 5 }, weight: 7, requires: ['broken-bridge'], sequence: ['broken-bridge'], rating: 0.8 },
   // Phase 9E balance: moving platforms and falling branches were staggered to
   // level 7 so level 6 no longer introduces five patterns at once — the
   // learning curve gains a new family at a time.
-  { id: 'moving-platform', minLevel: 7, weight: 6, requires: ['moving-platform'], sequence: ['moving-platform'], rating: 0.66 },
-  { id: 'falling-branch', minLevel: 7, weight: 8, requires: ['branch'], sequence: ['branch'], rating: 0.78 },
+  { id: 'moving-platform', minLevel: 7, envMinLevel: { 'misty-mountains': 5, jungle: 4 }, weight: 6, requires: ['moving-platform'], sequence: ['moving-platform'], rating: 0.66 },
+  { id: 'falling-branch', minLevel: 7, envMinLevel: { 'moonlit-forest': 5, jungle: 5 }, weight: 8, requires: ['branch'], sequence: ['branch'], rating: 0.78 },
   // Moving hazards require a complete renderer, collider, warning and validated envelope.
-  { id: 'warned-swinging-log', minLevel: 8, weight: 10, requires: ['swinging-log'], sequence: ['swinging-log'], rating: 0.85 },
+  { id: 'warned-swinging-log', minLevel: 8, envMinLevel: { 'moonlit-forest': 6, jungle: 4 }, weight: 10, requires: ['swinging-log'], sequence: ['swinging-log'], rating: 0.85 },
 ];
 
 /** Challenge rating of a pattern id (undefined for 'recovery'/unknown). */
@@ -136,9 +143,12 @@ export function patternAvailability(level: LevelConfiguration): { id: string; ca
   return OBSTACLE_PATTERNS.map(pattern => {
     const missing = pattern.requires.find(id => !obstacleReady(id));
     const incompatible = pattern.requires.find(id => !level.allowedObstacles.includes(id));
+    // Phase 11 — environments built on a family unlock its identity early;
+    // everywhere else the global ladder applies unchanged.
+    const effectiveMinLevel = pattern.envMinLevel?.[level.environment] ?? pattern.minLevel;
     const reason = missing ? `${missing} implementation incomplete`
       : incompatible ? `${incompatible} not allowed in ${level.environment}`
-      : level.number < pattern.minLevel ? `Requires level ${pattern.minLevel}` : undefined;
+      : level.number < effectiveMinLevel ? `Requires level ${effectiveMinLevel}` : undefined;
     const category = pattern.sequence.length > 1 ? 'combination' : OBSTACLE_REGISTRY[pattern.requires[0]].group;
     return { id: pattern.id, category, available: !reason, reason };
   });
@@ -156,6 +166,8 @@ export function validPlacementMetadata(value: unknown): value is PlacementMetada
 }
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+const clamp01 = (value: number) => clamp(value, 0, 1);
+const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 const overlap = (first: Region, second: Region) => first.start < second.end && second.start < first.end;
 
 export class ObstaclePlanner {
@@ -172,21 +184,67 @@ export class ObstaclePlanner {
     const approachTime = Math.max(0, context.candidateX - context.riderX) / Math.max(205, context.riderSpeed);
     const projectedSpeed = clamp(context.riderSpeed + context.riderAcceleration * approachTime,
       BICYCLE_PHYSICS.minSpeed, BICYCLE_PHYSICS.maxSpeed);
-    const reactionDistance = Math.max(BICYCLE_PHYSICS.maxSpeed, projectedSpeed) * reactionSeconds;
+    // Phase 11 — the planning corridor follows the rider's projected speed
+    // (natural cruise ≈ 266–305 px/s) instead of always assuming max speed,
+    // but never below the max-speed fairness floor: a sprinting rider must
+    // still get a full reaction window (independent validator: ≥ 0.9 s at
+    // max speed; we hold 0.95 s so metadata never sits on the line).
+    // Traversal validation below still tests every placement across the full
+    // speed envelope [minSpeed, 300, maxSpeed, projected].
+    const reactionDistance = Math.max(
+      BICYCLE_PHYSICS.maxSpeed * 0.95, projectedSpeed * reactionSeconds);
     const options: TraversalOptions = {
       speeds: [...new Set([BICYCLE_PHYSICS.minSpeed, 300, BICYCLE_PHYSICS.maxSpeed, projectedSpeed])],
       modes: ['tap', 'hold'], timingMargin: 8,
     };
     const rejected: PlacementRejection[] = [];
-    const recover = (reason?: string): ObstaclePlan => ({
-      patternId: 'recovery', obstacles: [], clearUntil: context.clearUntil,
-      nextX: Math.max(context.candidateX + 720 + random() * 320, context.clearUntil + reactionDistance),
-      rejected: reason ? [...rejected, { x: context.candidateX, patternId: 'recovery', reason }] : rejected,
-    });
+    // Phase 11 — obstacle-to-obstacle target from the directive's frequency
+    // band (design target; physics floors below always win). Falls back to
+    // the legacy random tail when no directive supplies a band.
+    const nearbyEndX = context.nearby.reduce((furthest, obstacle) =>
+      Math.max(furthest, obstacle.x + (obstacle.width ?? 40)), 0);
+    const recover = (reason?: string): ObstaclePlan => {
+      // Wave valleys schedule one deliberate scenic beat (pattern F: a longer
+      // coin-filled stretch with no hazards); ordinary recovery rolls stay
+      // short. Both are bounded by the caller's consecutive-slot guard so
+      // empty stretches can never chain into the multi-thousand-pixel gaps
+      // the Phase 11 audit measured.
+      const scenic = directive?.scenicRecovery === true;
+      // Phase 11 — an ordinary recovery slot consumes its band slot without
+      // adding distance: the successor comes at normal band spacing from the
+      // last placement (the old 0.9–1.15 × gapMax span stacked on top of the
+      // band and doubled the effective gap). Scenic beats keep their
+      // deliberate extra length, slightly tightened from 1.5–2.2 × to
+      // 1.2–1.7 × gapMax so a valley breathes ~9–12 s, not 15. Every
+      // recovery still advances the cursor (≥ 120 px, ≥ 240 px for the
+      // no-feasible fallback) so populateAhead's planning loop can never
+      // stall on unplaceable terrain.
+      const span = directive?.gapMaxPx
+        ? directive.gapMaxPx * (scenic ? 1.2 + random() * 0.5 : 0)
+        : 720 + random() * 320;
+      const base = Math.max(nearbyEndX + (directive?.gapMinPx ?? 500), context.clearUntil + reactionDistance);
+      const advance = reason ? 240 : 120;
+      return {
+        patternId: 'recovery', obstacles: [], clearUntil: context.clearUntil,
+        nextX: Math.max(base, context.candidateX + (scenic ? span : advance)),
+        rejected: reason ? [...rejected, { x: context.candidateX, patternId: 'recovery', reason }] : rejected,
+      };
+    };
 
     // Wave valleys and low-intensity zones schedule deliberate recovery
     // sections; the legacy flat chance keeps directive-less callers unchanged.
-    if (random() < (directive?.recoveryChance ?? 0.17)) return recover();
+    // Phase 11 — a recovery slot never follows another recovery slot, and at
+    // most two may land inside the recent window: the audit measured chains
+    // of up to nine consecutive empty slots (12.6 kpx) because recovery
+    // plans were invisible to the repetition memory. A deliberate calm
+    // stretch (calm-journey events drive recoveryChance to 1) is exempt:
+    // its emptiness is the event's designed identity, not an accident.
+    const recentForRecovery = directive ? (context.recentPatterns ?? []) : [];
+    const recentRecoveries = recentForRecovery.slice(-5).filter(id => id === 'recovery').length;
+    const previousWasRecovery = recentForRecovery[recentForRecovery.length - 1] === 'recovery';
+    const deliberateCalm = (directive?.recoveryChance ?? 0) >= 0.95;
+    const recoveryBlocked = !deliberateCalm && (previousWasRecovery || recentRecoveries >= 2);
+    if (!recoveryBlocked && random() < (directive?.recoveryChance ?? 0.17)) return recover();
     const availability = patternAvailability(context.level);
     const candidates = OBSTACLE_PATTERNS.filter(pattern => availability.find(item => item.id === pattern.id)?.available)
       .filter(pattern => !pattern.requires.includes('bridge') || context.candidateX >= context.bridgeAllowedAfter)
@@ -199,11 +257,20 @@ export class ObstaclePlanner {
     // weight boost; availability and validation are never reduced.
     const recent = directive ? (context.recentPatterns ?? []) : [];
     const focus = context.level.obstacleFocus;
+    // Phase 11 — family floors: families absent from the recent schedule get
+    // a strong weight boost so every eligible family of the environment
+    // genuinely appears (the audit measured snowballs/icicles/branches/
+    // swinging logs at ~one per 100 kpx or less). Pure weight bias —
+    // availability and validation are never relaxed.
+    const recentPlacedIds = recent.filter(id => id !== 'recovery');
+    const recentFamilies = new Set(recentPlacedIds.slice(-6).flatMap(id =>
+      OBSTACLE_PATTERNS.find(pattern => pattern.id === id)?.requires ?? []));
     const weights = candidates.map(pattern => {
       let weight = pattern.weight;
       if (directive) {
+        const band = directive.patternBand ?? 0.22;
         const delta = pattern.rating - directive.patternIntensity;
-        weight *= Math.max(0.12, Math.exp(-(delta * delta) / (2 * 0.22 * 0.22)));
+        weight *= Math.max(0.12, Math.exp(-(delta * delta) / (2 * band * band)));
         const repeats = recent.reduce((count, id) => count + (id === pattern.id ? 1 : 0), 0);
         weight *= 0.5 ** repeats;
         // Phase 9E — a pattern already scheduled twice back-to-back is benched
@@ -218,9 +285,11 @@ export class ObstaclePlanner {
         ) {
           weight = 0;
         }
+        // Phase 11 — family floor boost.
+        if (!pattern.requires.some(id => recentFamilies.has(id))) weight *= 3.2;
       }
       if (focus && focus.length) {
-        weight *= pattern.requires.some(id => focus.includes(id)) ? 1.9 : 0.72;
+        weight *= pattern.requires.some(id => focus.includes(id)) ? 1.5 : 0.8;
       }
       // Phase 9D — event preference (mountain crossing → bridges, rare
       // challenge → big lines, falling hazards → timed drops). Pure weight
@@ -295,7 +364,18 @@ export class ObstaclePlanner {
       // the full validation pipeline and honours the reaction distance.
       const hinted = context.hint && context.hint.prefer.length > 0;
       const offHint = hinted && !context.hint!.prefer.includes(pattern.id);
-      const nextX = plan.clearUntil + reactionDistance + spacingBase + extraRecovery + dangerPad + stackingPad + random() * 180;
+      // Phase 11 — the successor is scheduled inside the directive's
+      // frequency band (wave peaks aim at the tight end, calm stretches at
+      // the loose end), but never closer than the physics floors: reaction
+      // corridor, validation clear pads and the danger/stacking recovery.
+      const floorX = plan.clearUntil + reactionDistance + spacingBase + extraRecovery + dangerPad + stackingPad;
+      const lastPlacedX = plan.obstacles.length
+        ? plan.obstacles[plan.obstacles.length - 1].x
+        : Math.max(context.candidateX, nearbyEndX);
+      const nextX = directive?.gapMinPx && directive?.gapMaxPx
+        ? Math.max(floorX, lastPlacedX + lerp(directive.gapMaxPx, directive.gapMinPx,
+          clamp01(directive.wave?.tension ?? 0.7)) * (0.85 + random() * 0.3))
+        : floorX + random() * 180;
       return {
         patternId: pattern.id, obstacles: plan.obstacles, clearUntil: plan.clearUntil,
         nextX: offHint

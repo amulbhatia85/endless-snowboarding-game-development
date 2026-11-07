@@ -645,12 +645,16 @@ test('Coin trails are collectible by the default rider without abilities', () =>
   for (const coin of initial) {
     assert.ok((coin.offset ?? 25) <= maxReachableCoinOffset(), `coin offset ${coin.offset} within jump reach`);
   }
-  // No magnet, no shield — just jump for the elevated stones.
+  // No magnet, no shield — just jump for the elevated stones. Hazard
+  // avoidance takes priority over greedy coin jumps (chasing a coin whose
+  // arc lands inside a gap is a rider choice, not a placement problem); the
+  // loop is frame-bounded so a crash can never spin it.
   let time = game.__rideTime ?? 0;
-  while (run.rider.x < window.endX + 80) {
+  for (let index = 0; index < 60 * 120 && !run.over && run.rider.x < window.endX + 80; index += 1) {
     run.invulnerableUntil = run.elapsed + 10;
     run.rider.speed = 475;
-    coinJump(game);
+    controllerJump(game);
+    if (!game.jumpQueued) coinJump(game);
     time += 1000 / 60;
     game.__rideTime = time;
     game.frame(time);

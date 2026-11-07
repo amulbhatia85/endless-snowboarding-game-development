@@ -1,7 +1,7 @@
 import type { ObstacleId } from './obstacleRegistry';
 
 export const LEVEL_TARGET_SCORE = 50_000;
-export type EnvironmentTheme = 'countryside' | 'snowy-mountains' | 'misty-mountains' | 'moonlit-forest';
+export type EnvironmentTheme = 'countryside' | 'snowy-mountains' | 'misty-mountains' | 'moonlit-forest' | 'jungle';
 export type ObstacleCategory = ObstacleId;
 
 /**
@@ -71,6 +71,7 @@ const THEME_PROFILE_WEIGHTS: Record<EnvironmentTheme, Partial<Record<Exclude<Lev
   'snowy-mountains': { 'mountain-descent': 5, 'technical-slopes': 4, 'flowing-hills': 2, 'mixed-terrain': 3, 'rolling-valleys': 2, 'gradual-climb': 0, 'controlled-flats': 0 },
   'misty-mountains': { 'mountain-descent': 4, 'gradual-climb': 3, 'technical-slopes': 3, 'rolling-valleys': 3, 'mixed-terrain': 2, 'flowing-hills': 0, 'controlled-flats': 1 },
   'moonlit-forest': { 'flowing-hills': 4, 'technical-slopes': 3, 'rolling-valleys': 3, 'controlled-flats': 2, 'mixed-terrain': 3, 'mountain-descent': 0, 'gradual-climb': 2 },
+  jungle: { 'flowing-hills': 4, 'rolling-valleys': 4, 'mixed-terrain': 3, 'gradual-climb': 2, 'technical-slopes': 2, 'controlled-flats': 1, 'mountain-descent': 0 },
 };
 
 /** Identity flavour words for generated level names (levels ≥ 5). */
@@ -89,6 +90,7 @@ const THEME_NOUNS: Record<EnvironmentTheme, string> = {
   'snowy-mountains': 'Peaks',
   'misty-mountains': 'Range',
   'moonlit-forest': 'Forest',
+  jungle: 'Jungle',
 };
 
 export interface LevelConfiguration {
@@ -118,12 +120,17 @@ export interface LevelConfiguration {
   };
 }
 
-const THEMES: readonly EnvironmentTheme[] = ['countryside', 'snowy-mountains', 'misty-mountains', 'moonlit-forest'];
+const THEMES: readonly EnvironmentTheme[] = ['countryside', 'snowy-mountains', 'misty-mountains', 'moonlit-forest', 'jungle'];
 const THEME_CONFIG = {
   countryside: { name: 'Green Hills', obstacles: ['rock', 'log', 'tree', 'root', 'fence', 'ramp', 'gap', 'bridge'], weather: 'clear', intensity: 0, speed: 1 },
   'snowy-mountains': { name: 'Snowfall Adventure', obstacles: ['rock', 'log', 'ice', 'icicle', 'snowball', 'gap', 'ramp', 'bridge'], weather: 'snow', intensity: 0.5, speed: 0.38 },
   'misty-mountains': { name: 'Misty Mountains', obstacles: ['rock', 'gap', 'cliff', 'bridge', 'broken-bridge', 'ramp', 'log', 'moving-platform'], weather: 'mist', intensity: 0.4, speed: 0.4 },
   'moonlit-forest': { name: 'Moonlit Forest', obstacles: ['tree', 'rock', 'root', 'branch', 'log', 'swinging-log', 'gap'], weather: 'night', intensity: 0.35, speed: 0.5 },
+  // Phase 11 — the fifth environment: a dense canopy world of vines, ruin
+  // stones and river crossings. Owns the timed-hazard families early
+  // (falling branches from L3, swinging vines from L4) plus moving
+  // platforms; mechanically it reuses fully validated obstacle kinds.
+  jungle: { name: 'Jungle Canopy', obstacles: ['tree', 'rock', 'root', 'log', 'branch', 'swinging-log', 'gap', 'ramp', 'bridge', 'moving-platform'], weather: 'mist', intensity: 0.45, speed: 0.42 },
 } as const;
 
 /**

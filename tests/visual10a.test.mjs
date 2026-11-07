@@ -240,6 +240,15 @@ test('Suspension state resets on revive and on restart', () => {
 test('Cadence bob animates the grounded rider within a tight envelope', () => {
   const game = makeEngine(seedSave(4242, 12));
   ride(game, 160);
+  // Phase 11 — pacing shifted the jump schedule, so the ride continues
+  // (bounded) until the rider has been grounded for a sustained stretch
+  // (24 consecutive frames) before sampling the bob — a single grounded
+  // frame right after a landing still carries the settle.
+  let settled = 0;
+  for (let index = 0; index < 300 && settled < 24 && !game.run.over; index += 1) {
+    ride(game, 1);
+    settled = game.run.rider.grounded ? settled + 1 : 0;
+  }
   const run = game.run;
   assert.ok(run.rider.grounded, 'riding grounded');
   const riderX = Math.round(run.rider.x - run.cameraX);
@@ -464,8 +473,18 @@ test('Canvas text uses the interface font stack', () => {
 test('Coin pickups pop with a bright core sparkle', () => {
   const game = makeEngine(seedSave(4242, 12));
   ride(game, 120);
+  // Phase 11 — continue (bounded) until grounded, then clear the hazards in
+  // the passive ride's path: this test verifies the pickup's particle pop,
+  // not the surrounding schedule.
+  for (let index = 0; index < 120 && !game.run.rider.grounded && !game.run.over; index += 1) {
+    ride(game, 1);
+  }
   const run = game.run;
   const coinX = run.rider.x + 140;
+  run.objects = run.objects.filter((object) => {
+    if (['coin', 'magnet', 'shield', 'double'].includes(object.kind)) return true;
+    return object.x < run.rider.x || object.x > run.rider.x + 420;
+  });
   run.objects.push({ kind: 'coin', x: coinX, offset: 20 });
   ride(game, 30, { jump: null });
   assert.ok(!run.objects.some((object) => object.kind === 'coin' && object.x === coinX), 'coin collected');

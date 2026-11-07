@@ -20,6 +20,7 @@ const PROFILES: Record<EnvironmentTheme, { range: number; bump: number; recovery
   'snowy-mountains': { range: 38, bump: 32, recovery: 0.2 },
   'misty-mountains': { range: 33, bump: 28, recovery: 0.24 },
   'moonlit-forest': { range: 25, bump: 22, recovery: 0.28 },
+  jungle: { range: 30, bump: 26, recovery: 0.24 },
 };
 /** Phase 9C — the neutral bias keeps levels 1–4 byte-identical to Phase 8. */
 const NEUTRAL_TERRAIN_BIAS: TerrainBias = { rangeScale: 1, bumpScale: 1, recoveryScale: 1, valleyBias: 0 };
@@ -305,7 +306,73 @@ export function validateGap(heightAt: (x: number) => number, x: number, width: n
   const takeoff = x - 55;
   const approachSlope = Math.abs((heightAt(x) - heightAt(takeoff)) / 55);
   if (approachSlope > 0.18) return { safe: false, clearUntil: x, reason: 'Takeoff slope too steep' };
+  const airborne = validateGapAgainstCrestLaunch(heightAt, x, width);
+  if (!airborne.safe) return airborne;
   return validateLanding(heightAt, takeoff, heightAt(takeoff) - 5, x + width, undefined, options);
+}
+
+/**
+ * Phase 11 — crest-launch guard. `validateLanding` simulates a grounded
+ * takeoff at the lip; it cannot see a rider who crested a hill further back
+ * and is already airborne with no way to jump again. This guard simulates
+ * the two worst-case airborne approaches at top speed — a natural terrain
+ * launch off the highest crest in the approach window, and a hold jump from
+ * that same crest — and rejects the gap when either arc would come down
+ * inside it. Pure validation: rejected placements are retried elsewhere with
+ * the reason recorded, exactly like every other feasibility rule.
+ */
+export function validateGapAgainstCrestLaunch(
+  heightAt: (x: number) => number, x: number, width: number,
+): LandingValidation {
+  const fail = (reason: string): LandingValidation => ({ safe: false, clearUntil: x, reason });
+  // Highest crest in the approach window (beyond one full hold-jump range).
+  const windowStart = x - 780;
+  let crestX = -1;
+  let crestY = -Infinity;
+  for (let sample = windowStart; sample <= x - 60; sample += 20) {
+    const y = heightAt(sample);
+    if (y > crestY) { crestY = y; crestX = sample; }
+  }
+  if (crestX < 0) return { safe: true, clearUntil: x };
+  // Only terrain that falls away behind the crest launches a rider.
+  const dropPastCrest = crestY - heightAt(Math.min(crestX + 90, x - 20));
+  if (dropPastCrest < 26) return { safe: true, clearUntil: x };
+  const slopeAfterCrest = (heightAt(Math.min(crestX + 40, x - 20)) - crestY) / 40;
+  const farEdge = x + width;
+  const nearLipY = heightAt(x);
+  for (const mode of ['coast', 'hold'] as const) {
+    const speed = BICYCLE_PHYSICS.maxSpeed;
+    let px = crestX;
+    let py = crestY - BICYCLE_PHYSICS.groundOffset;
+    let vy = Math.max(0, slopeAfterCrest * speed)
+      - (mode === 'hold'
+        ? BICYCLE_PHYSICS.jumpVelocity + Math.min(BICYCLE_PHYSICS.maxJumpBoost, speed * BICYCLE_PHYSICS.jumpSpeedFactor)
+        : 0);
+    const delta = 1 / 120;
+    let reachedGapAirborne = false;
+    for (let frame = 0; frame < 480; frame += 1) {
+      px += speed * delta;
+      vy += BICYCLE_PHYSICS.gravity * delta;
+      py += vy * delta;
+      if (px >= x) { reachedGapAirborne = true; break; }
+      if (py >= heightAt(px) - BICYCLE_PHYSICS.groundOffset) break; // grounded again: the ground rules apply
+    }
+    if (!reachedGapAirborne) continue;
+    // Airborne across the span: the arc must stay above the near lip and
+    // clear the far lip with a readable margin.
+    while (px < farEdge) {
+      px += speed * delta;
+      vy += BICYCLE_PHYSICS.gravity * delta;
+      py += vy * delta;
+      if (py >= nearLipY - BICYCLE_PHYSICS.groundOffset) {
+        return fail('Crest-launch trajectory descends into the gap');
+      }
+    }
+    if (py > heightAt(farEdge) - BICYCLE_PHYSICS.groundOffset - 20) {
+      return fail('Crest-launch trajectory cannot clear the far lip');
+    }
+  }
+  return { safe: true, clearUntil: x };
 }
 
 export function validateRamp(heightAt: (x: number) => number, x: number, options?: TraversalOptions): LandingValidation {

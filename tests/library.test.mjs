@@ -216,6 +216,7 @@ test('The planner generates every new obstacle type in its matching environments
     'snowy-mountains': ['ice', 'icicle', 'snowball'],
     'misty-mountains': ['cliff', 'broken-bridge', 'moving-platform'],
     'moonlit-forest': ['root', 'branch'],
+    jungle: ['root', 'branch', 'swinging-log'],
   };
   const seen = new Map(Object.keys(expected).map((env) => [env, new Set()]));
   const start = performance.now();
@@ -302,6 +303,10 @@ test('Consecutive hazard corridors never overlap, including the new kinds', () =
 // ───────────────────────── engine: preview, physics, collisions, rendering ─────────────────────────
 
 test('Obstacle preview mode collapses generation to one validated type and restores mixes', () => {
+  // Phase 11 — the passive rider dies on the first hazard after the reset
+  // that ending a preview triggers, which starved the mix sample. The rider
+  // stays invulnerable here because this test is about the planner's variety,
+  // not survival.
   const collect = (game, frames) => {
     const placed = [];
     const run = game.run;
@@ -309,6 +314,7 @@ test('Obstacle preview mode collapses generation to one validated type and resto
       for (const object of run.objects) {
         if (object.plan && !placed.includes(object)) placed.push(object);
       }
+      run.invulnerableUntil = run.elapsed + 10;
       game.clock += 1 / 60;
       game.step(1 / 60);
       if (run.over) break;
@@ -389,10 +395,15 @@ test('Ice patches cut traction: lean lags and slope input is amplified', () => {
   const onIceRotation = run.rider.rotation;
   assert.ok(onIceRotation > 0.25, `lean lags on ice (${onIceRotation.toFixed(3)})`);
   // Same spot without the patch: the lean snaps to the terrain angle.
+  // (Phase 11 note — the patch hunt accepts slopes up to 0.06, so the snap
+  // target itself can sit at ~0.057 rad; compare against the real ground
+  // angle instead of near-zero.)
   run.objects.splice(run.objects.indexOf(patch), 1);
   run.rider.rotation = 0.4;
   game.step(1 / 60);
-  assert.ok(Math.abs(run.rider.rotation) < 0.05, `lean snaps without ice (${run.rider.rotation.toFixed(3)})`);
+  const groundAngle = Math.atan(slopeAt(x));
+  assert.ok(Math.abs(run.rider.rotation - groundAngle) < 0.03,
+    `lean snaps to the terrain angle without ice (${run.rider.rotation.toFixed(3)} vs ${groundAngle.toFixed(3)})`);
 
   // Speed amplification: same engine, same descending spot, two passes — one
   // with an ice patch covering it, one without. The backward re-park between

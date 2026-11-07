@@ -95,6 +95,15 @@ export interface GroundStyle {
   speckle: string;
 }
 
+/** Phase 11 — ambient hot-air balloons drifting through the sky layer. */
+export interface BalloonStyle {
+  colors: readonly string[];
+  /** Average balloon-space px between balloons (jittered ±35 %). */
+  spacingPx: number;
+  /** Scroll factor relative to the camera (0 = sky-fixed, 1 = terrain speed). */
+  parallax: number;
+}
+
 export interface EnvironmentDefinition {
   id: EnvironmentTheme;
   /** Cyclic day-phase stops; the first and last values match for a seamless wrap. */
@@ -110,6 +119,8 @@ export interface EnvironmentDefinition {
   stars: number;
   shootingStars: boolean;
   flock: boolean;
+  /** Phase 11 — sky balloons; absent = none (purely cosmetic). */
+  balloons: BalloonStyle | null;
   decorations: { entries: ReadonlyArray<{ kind: DecorationKind; weight: number }>; spacing: number };
   decorationColors: { foliage: string; foliageDark: string; accent: string; stone: string };
   ambient: AmbientStyle | null;
@@ -410,6 +421,7 @@ const COUNTRYSIDE: EnvironmentDefinition = {
   stars: 26,
   shootingStars: false,
   flock: true,
+  balloons: { colors: ['#d9634f', '#e8b34b', '#7fae7a', '#e5d9c0'], spacingPx: 1150, parallax: 0.16 },
   decorations: {
     entries: [{ kind: 'grass', weight: 40 }, { kind: 'flower', weight: 10 }, { kind: 'bush', weight: 8 }, { kind: 'pine', weight: 5 }, { kind: 'stone', weight: 2 }],
     spacing: 74,
@@ -471,6 +483,7 @@ const SNOWY: EnvironmentDefinition = {
   stars: 64,
   shootingStars: true,
   flock: false,
+  balloons: { colors: ['#b5432f', '#3f7d8c', '#d9c06b'], spacingPx: 1400, parallax: 0.14 },
   decorations: {
     entries: [{ kind: 'snowy-pine', weight: 16 }, { kind: 'snowy-bush', weight: 8 }, { kind: 'drift', weight: 13 }, { kind: 'stone', weight: 3 }],
     spacing: 105,
@@ -532,6 +545,7 @@ const MISTY: EnvironmentDefinition = {
   stars: 14,
   shootingStars: false,
   flock: true,
+  balloons: { colors: ['#8c6f7d', '#5f7d8c', '#b0a08c'], spacingPx: 1500, parallax: 0.15 },
   decorations: {
     entries: [{ kind: 'fern', weight: 15 }, { kind: 'reed', weight: 9 }, { kind: 'silhouette-pine', weight: 11 }, { kind: 'mossy-rock', weight: 6 }],
     spacing: 98,
@@ -596,6 +610,7 @@ const MOONLIT: EnvironmentDefinition = {
   stars: 84,
   shootingStars: true,
   flock: false,
+  balloons: { colors: ['#c98a3f', '#7d5f9e', '#4b6f8c'], spacingPx: 1600, parallax: 0.15 },
   decorations: {
     entries: [{ kind: 'silhouette-pine', weight: 20 }, { kind: 'glow-shroom', weight: 7 }, { kind: 'stone', weight: 4 }],
     spacing: 92,
@@ -609,11 +624,77 @@ const MOONLIT: EnvironmentDefinition = {
   burst: { heavy: '#dee6ff', soft: '#e6ecff' },
 };
 
+// Phase 11 — the fifth environment: a lush jungle canopy. Dense layered
+// greens, humid haze, god-ray light shafts and night fireflies; the ground
+// style is the forest renderer with a tropical crest. Purely cosmetic —
+// collision, terrain physics and obstacle behaviour are untouched.
+const JUNGLE: EnvironmentDefinition = {
+  id: 'jungle',
+  stops: [
+    {
+      at: 0,
+      palette: { top: '#6fa5a0', horizon: '#ffdfae', far: '#5f9184', middle: '#3f7a58', near: '#2f6347', snow: '#7fc489', snowShade: '#4f9463', glow: '#ffe9b8', moon: '#fff4dc', night: 0.2 },
+    },
+    {
+      at: 0.38,
+      palette: { top: '#5fb7c9', horizon: '#f2f7d8', far: '#5aa886', middle: '#3f8a5c', near: '#2e6f49', snow: '#8fd694', snowShade: '#57a869', glow: '#f6ffd9', moon: '#fffdf0', night: 0 },
+    },
+    {
+      at: 0.64,
+      palette: { top: '#6fa8b8', horizon: '#ffd9a0', far: '#5b9a7e', middle: '#3d7f55', near: '#2d6644', snow: '#9ccf8e', snowShade: '#5da266', glow: '#ffcf96', moon: '#fff2dc', night: 0.1 },
+    },
+    {
+      at: 0.82,
+      palette: { top: '#2e4a5e', horizon: '#c98a6a', far: '#3c6a5c', middle: '#2c5544', near: '#204232', snow: '#5f9a74', snowShade: '#3a7050', glow: '#e8b088', moon: '#fff0d8', night: 0.5 },
+    },
+    {
+      at: 0.9,
+      palette: { top: '#0c2432', horizon: '#1e4a44', far: '#173c36', middle: '#12312c', near: '#0d2622', snow: '#3f7a5e', snowShade: '#255240', glow: '#9fd8b0', moon: '#f2ffe8', night: 0.85 },
+    },
+    {
+      at: 0.965,
+      palette: { top: '#3c6a70', horizon: '#d8c090', far: '#4a7f72', middle: '#33604a', near: '#264e3a', snow: '#74b488', snowShade: '#48875e', glow: '#e8d8a8', moon: '#fff4dc', night: 0.35 },
+    },
+    {
+      at: 1,
+      palette: { top: '#6fa5a0', horizon: '#ffdfae', far: '#5f9184', middle: '#3f7a58', near: '#2f6347', snow: '#7fc489', snowShade: '#4f9463', glow: '#ffe9b8', moon: '#fff4dc', night: 0.2 },
+    },
+  ],
+  layers: [
+    { parallax: 0.05, baseY: 0.42, amplitude: 0.17, roughness: 0.75, snowcap: 0, treeline: 0.55, color: '#4a7f6e' },
+    { parallax: 0.12, baseY: 0.55, amplitude: 0.11, roughness: 0.45, snowcap: 0, treeline: 0.75, color: '#3a6f58' },
+    { parallax: 0.24, baseY: 0.66, amplitude: 0.075, roughness: 0.3, snowcap: 0, treeline: 0.9, color: '#2c5c46' },
+    { parallax: 0.38, baseY: 0.75, amplitude: 0.05, roughness: 0.22, snowcap: 0, treeline: 1, color: '#1f4a36' },
+  ],
+  fogColor: '#bfe0c8',
+  fogVeil: [0.22, 0.14, 0.08, 0.04],
+  weather: [{ kind: 'wind', intensity: 0.18 }, { kind: 'fog', intensity: 0.18 }],
+  clouds: { count: 6, opacity: 0.18, speed: 0.9, tint: '#eaf5da' },
+  sun: 1,
+  moon: 0.7,
+  stars: 40,
+  shootingStars: false,
+  flock: true,
+  balloons: { colors: ['#e86a4b', '#f0c04b', '#3f9e6f', '#9e5fa8'], spacingPx: 1000, parallax: 0.17 },
+  decorations: {
+    entries: [{ kind: 'fern', weight: 18 }, { kind: 'bush', weight: 10 }, { kind: 'reed', weight: 8 }, { kind: 'mossy-rock', weight: 6 }, { kind: 'flower', weight: 6 }, { kind: 'silhouette-pine', weight: 8 }],
+    spacing: 80,
+  },
+  decorationColors: { foliage: '#2f7d4a', foliageDark: '#1f5c36', accent: '#ffd9a0', stone: '#6f8a6a' },
+  ambient: { count: 14, color: '#c8f2a8', glow: 8, sizeMin: 1.2, sizeMax: 2.4, hoverMin: 24, hoverMax: 130, flickerMin: 0.12, flickerMax: 0.9, drift: 14, nightOnly: true },
+  ground: { kind: 'forest', detail: 1, crest: '#b8e89a', speckle: '#2c5c3a' },
+  groundMist: 0.4,
+  lightShafts: 0.7,
+  spray: { color: '#d8f0c0', rate: 0.55, size: 0.85 },
+  burst: { heavy: '#e2f2ce', soft: '#eaf6da' },
+};
+
 export const ENVIRONMENTS: Readonly<Record<EnvironmentTheme, EnvironmentDefinition>> = {
   countryside: COUNTRYSIDE,
   'snowy-mountains': SNOWY,
   'misty-mountains': MISTY,
   'moonlit-forest': MOONLIT,
+  jungle: JUNGLE,
 };
 
 /** Folds the level's own weather block into the environment's effects. */
@@ -656,6 +737,8 @@ export class EnvironmentManager {
   private readonly resolvedLayers: ParallaxLayerStyle[] = [];
   private readonly resolvedVeil: [number, number, number, number] = [0, 0, 0, 0];
   private resolvedClouds = { count: 0, opacity: 0, speed: 0, tint: '#ffffff' };
+  /** Phase 11 — resolved sky-balloon style (null = no balloons). */
+  private resolvedBalloons: BalloonStyle | null = null;
   private resolvedLight = { sun: 0, moon: 0, stars: 0, shootingStars: false, flock: false };
   private resolvedWeather: WeatherEffectConfig[] = [];
   private resolvedAmbient: AmbientStyle = { ...EMPTY_AMBIENT };
@@ -861,6 +944,7 @@ export class EnvironmentManager {
       shootingStars: t >= 0.5 ? (toDef ?? fromDef).shootingStars : fromDef.shootingStars,
       flock: t >= 0.5 ? (toDef ?? fromDef).flock : fromDef.flock,
     };
+    this.resolvedBalloons = t >= 0.5 ? (toDef ?? fromDef).balloons : fromDef.balloons;
 
     const fromWeather = this.from.weather;
     const toWeather = this.to?.weather;
@@ -1807,6 +1891,89 @@ export class EnvironmentManager {
   }
 
   // ───────────────────────── ambient particles ─────────────────────────
+
+  /**
+   * Phase 11 — ambient hot-air balloons drifting through the sky. Fully
+   * deterministic: balloon-space is hashed per bucket, so the same camera
+   * position always shows the same balloons. Purely cosmetic.
+   */
+  drawBalloons(context: CanvasRenderingContext2D, view: EnvironmentView, palette: Palette): void {
+    const style = this.resolvedBalloons;
+    if (!style || !style.colors.length) return;
+    const parallax = style.parallax;
+    // Balloon space scrolls with the parallax factor plus a slow self-drift.
+    const space = view.cameraX * parallax + this.time * 7;
+    const bucket = Math.max(320, style.spacingPx);
+    const first = Math.floor((space - 140) / bucket);
+    const last = Math.ceil((space + view.width + 140) / bucket);
+    const night = palette.night;
+    context.save();
+    for (let index = first; index <= last; index += 1) {
+      const h1 = hash(index * 73 + 11);
+      const h2 = hash(index * 149 + 37);
+      const h3 = hash(index * 281 + 59);
+      const h4 = hash(index * 163 + 97);
+      // ~78 % of buckets carry a balloon; spacing config sets the density.
+      if (h1 > 0.78) continue;
+      const sx = index * bucket + (h2 - 0.5) * bucket * 0.7 - space;
+      const altitude = view.height * (0.14 + h3 * 0.24);
+      const radius = 15 + h4 * 13;
+      const bob = Math.sin(this.time * 0.55 + h2 * TAU) * 7;
+      const color = style.colors[Math.floor(h3 * style.colors.length) % style.colors.length];
+      const alpha = 0.94 - night * 0.42;
+      this.drawBalloon(context, sx, altitude + bob, radius, color, alpha, palette);
+    }
+    context.restore();
+  }
+
+  private drawBalloon(
+    context: CanvasRenderingContext2D, x: number, y: number, radius: number,
+    color: string, alpha: number, palette: Palette,
+  ): void {
+    context.save();
+    context.translate(x, y);
+    context.globalAlpha = alpha;
+    // Envelope — a lit sphere with a soft terminator.
+    const envelope = context.createRadialGradient(-radius * 0.35, -radius * 0.45, radius * 0.15, 0, 0, radius * 1.15);
+    envelope.addColorStop(0, mixColor(color, '#ffffff', 0.38));
+    envelope.addColorStop(0.62, color);
+    envelope.addColorStop(1, mixColor(color, '#2b2436', 0.42));
+    context.fillStyle = envelope;
+    context.beginPath();
+    context.ellipse(0, 0, radius * 0.92, radius, 0, 0, TAU);
+    context.fill();
+    // Gore seams curve down the envelope.
+    context.strokeStyle = alphaColor(mixColor(color, '#2b2436', 0.5), 0.5);
+    context.lineWidth = 1;
+    for (const spread of [-0.5, 0, 0.5]) {
+      context.beginPath();
+      context.ellipse(spread * radius * 0.8, 0, radius * 0.34, radius, 0, -Math.PI * 0.5, Math.PI * 0.5);
+      context.stroke();
+    }
+    // Neck, rigging and basket.
+    context.strokeStyle = alphaColor('#4a3a2c', 0.85);
+    context.lineWidth = 1.2;
+    context.beginPath();
+    context.moveTo(-radius * 0.4, radius * 0.86);
+    context.lineTo(-radius * 0.26, radius * 1.38);
+    context.moveTo(radius * 0.4, radius * 0.86);
+    context.lineTo(radius * 0.26, radius * 1.38);
+    context.stroke();
+    context.fillStyle = mixColor('#6b4a2f', color, 0.18);
+    context.fillRect(-radius * 0.3, radius * 1.36, radius * 0.6, radius * 0.4);
+    // At night the burner glows warm — a small lantern soul for each balloon.
+    if (palette.night > 0.25) {
+      context.globalAlpha = alpha * Math.min(1, (palette.night - 0.25) / 0.5) * (0.7 + 0.3 * Math.sin(this.time * 3.1 + x));
+      const burner = context.createRadialGradient(0, radius * 1.1, 1, 0, radius * 1.1, radius * 0.8);
+      burner.addColorStop(0, 'rgba(255,190,110,0.85)');
+      burner.addColorStop(1, 'rgba(255,190,110,0)');
+      context.fillStyle = burner;
+      context.beginPath();
+      context.arc(0, radius * 1.1, radius * 0.8, 0, TAU);
+      context.fill();
+    }
+    context.restore();
+  }
 
   drawAmbient(context: CanvasRenderingContext2D, view: EnvironmentView): void {
     if (this.ambientActive <= 0) return;

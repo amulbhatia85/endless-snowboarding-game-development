@@ -97,7 +97,12 @@ test('an unshielded obstacle crash never regresses run.distance or throws', () =
   // No shield, no input: the rider deterministically crashes into the first
   // hazard, exercising crash(), the cosmetic backward tumble and the score
   // sync that used to throw when the tumble crossed a 10 px score boundary.
+  // Phase 11 pacing places the first hazard after the first power-up, so the
+  // power pipeline is disabled here — otherwise the passive rider rides
+  // through a shield and survives exactly the crash this test needs.
   const game = makeEngine({ save: seedSave(7, 1) });
+  game.run.objects = game.run.objects.filter((object) => !['magnet', 'shield', 'double'].includes(object.kind));
+  game.run.nextPowerX = 1e12;
   const distances = ride(game, 60 * 30, { shield: false });
 
   assertMonotonic(distances);

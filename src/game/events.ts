@@ -182,7 +182,9 @@ export const EVENT_DEFINITIONS: readonly EventDefinition[] = [
     minProgression: 0.55,
     rarity: 0.55,
     cooldown: 40000,
-    duration: 4400,
+    // Phase 11 — widened so the gauntlet fits at least two hot lines after
+    // the base pacing widened (lookahead alone consumes ~2 kpx of a window).
+    duration: 6200,
     effects: effects({ dangerBias: 0.5, hazardFocus: 0.6, recoveryBoost: 1, prefer: ['cliff-jump', 'ramp-gap', 'warned-swinging-log'] }),
   },
   {
@@ -365,8 +367,14 @@ export class EventManager {
     const upcoming = this.windows.find((window) => window.endX > riderX - 100);
     if (upcoming) {
       const forced = this.forced;
+      // Phase 11 — the forced definition's own duration applies, so a
+      // previewed event behaves like its organically scheduled self instead
+      // of inheriting whichever window happened to sit ahead of the rider.
+      const definition = eventDefinition(forced);
       this.windows = this.windows.map((window) =>
-        window === upcoming ? { ...window, eventId: forced } : window);
+        window === upcoming
+          ? { ...window, eventId: forced, endX: window.startX + definition.duration }
+          : window);
       return;
     }
     // Schedule is exhausted (or fully behind the rider): append one window so

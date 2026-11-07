@@ -60,6 +60,18 @@ export interface DifficultyConfig {
   safeApproachFrom: number;
   /** How many recent pattern ids the repetition memory keeps. */
   recentPatternMemory: number;
+  /**
+   * Phase 11 — frequency design targets (seconds between challenges at the
+   * measured natural cruise, ~285 px/s). These are pacing targets, not fixed
+   * timers: physics floors always win, and scenic recovery stretches may run
+   * longer on purpose. Bands: L1 6–10 s · L2–4 4–7 s · L5–10 3–6 s · L11+ 2.5–5 s.
+   */
+  gapSeconds: { level1: [number, number]; levels2to4: [number, number]; levels5to10: [number, number]; levels11Plus: [number, number] };
+  /** Nominal natural cruise speed used to convert the bands into pixels. */
+  cruiseSpeedPx: number;
+  /** Gaussian σ of the pattern-rating match at intensity 0 / 1 (Phase 11). */
+  patternBandEasy: number;
+  patternBandHard: number;
 }
 
 export const DEFAULT_DIFFICULTY_CONFIG: DifficultyConfig = {
@@ -84,11 +96,20 @@ export const DEFAULT_DIFFICULTY_CONFIG: DifficultyConfig = {
   dangerRecovery: 240,
   reactionEasy: 1.3,
   reactionHard: 0.95,
-  recoveryChanceEasy: 0.3,
-  recoveryChanceHard: 0.1,
-  recoveryValleyBonus: 0.5,
+  recoveryChanceEasy: 0.22,
+  recoveryChanceHard: 0.06,
+  recoveryValleyBonus: 0.32,
   safeApproachFrom: 0.9,
-  recentPatternMemory: 8,
+  recentPatternMemory: 10,
+  gapSeconds: {
+    level1: [6, 10],
+    levels2to4: [4, 7],
+    levels5to10: [3, 6],
+    levels11Plus: [2.5, 5],
+  },
+  cruiseSpeedPx: 285,
+  patternBandEasy: 0.24,
+  patternBandHard: 0.38,
 };
 
 export interface ZoneSnapshot {
@@ -134,6 +155,21 @@ export interface DifficultyDirective {
   recentPatternMemory: number;
   /** Rider capability snapshot derived from the shared physics constants. */
   riderEnvelope: { minJumpDistance: number; maxJumpDistance: number; maxSpeed: number };
+  /**
+   * Phase 11 — target band for the distance between consecutive challenges
+   * (px), after zone/terrain shaping. Design target: the planner samples
+   * inside the band but never below the physics floors.
+   */
+  gapMinPx: number;
+  gapMaxPx: number;
+  /**
+   * Phase 11 — Gaussian σ for the pattern-rating match. Widens with the
+   * level curve so late levels draw from a broad pattern mix instead of a
+   * narrow intensity band.
+   */
+  patternBand: number;
+  /** Phase 11 — inside a wave valley: the planner schedules scenic recovery. */
+  scenicRecovery: boolean;
 }
 
 export interface DifficultyInputs {
@@ -187,6 +223,20 @@ export class DifficultyManager {
       }
     }
     if (merged.zones[merged.zones.length - 1].upTo < 1) throw new RangeError('the last zone must cover progress 1.');
+    // Phase 11 — frequency bands must be sane seconds at a sane cruise speed.
+    for (const [min, max] of [merged.gapSeconds.level1, merged.gapSeconds.levels2to4,
+      merged.gapSeconds.levels5to10, merged.gapSeconds.levels11Plus]) {
+      if (!Number.isFinite(min) || !Number.isFinite(max) || min <= 0 || max < min) {
+        throw new RangeError('gapSeconds bands must be positive and ordered.');
+      }
+    }
+    if (!Number.isFinite(merged.cruiseSpeedPx) || merged.cruiseSpeedPx <= 0) {
+      throw new RangeError('cruiseSpeedPx must be positive.');
+    }
+    if (!Number.isFinite(merged.patternBandEasy) || !Number.isFinite(merged.patternBandHard)
+      || merged.patternBandEasy <= 0 || merged.patternBandHard < merged.patternBandEasy) {
+      throw new RangeError('patternBand bounds must be positive and ordered.');
+    }
     this.config = merged;
   }
 
@@ -252,6 +302,17 @@ export class DifficultyManager {
     const recoveryChance = Math.min(0.85,
       lerp(this.config.recoveryChanceEasy, this.config.recoveryChanceHard, intensity)
       + (wave.recovery ? this.config.recoveryValleyBonus : 0));
+    // Phase 11 — frequency design target: the seconds band for this level
+    // converted to pixels at the measured natural cruise, then shaped by the
+    // pacing zone (warm-ups ride the upper half, the peak tightens) and
+    // widened slightly on complex terrain so rough ground never stacks with
+    // a tight schedule. Physics floors still apply below the band.
+    const band = this.gapSecondsBand(level.number);
+    const zoneGapScale = zone.label === 'SAFE APPROACH'
+      ? 1.25
+      : lerp(1.18, 0.96, clamp01((zone.multiplier - 0.5) / 0.56));
+    const terrainGapScale = 1 + this.config.terrainDamping * terrainComplexity * 0.5;
+    const gapScale = zoneGapScale * terrainGapScale;
     return {
       level: level.number,
       environment: level.environment,
@@ -261,7 +322,7 @@ export class DifficultyManager {
       wave,
       terrainComplexity,
       intensity,
-      patternIntensity: Math.max(0.05, intensity),
+      patternIntensity: Math.max(0.12, intensity),
       reactionSeconds,
       recoveryChance,
       minSpacing: lerp(this.config.spacingEasy, this.config.spacingHard, intensity),
@@ -270,7 +331,21 @@ export class DifficultyManager {
       nextRecoveryPoints: this.nextRecoveryPoints(progress, level.targetScore),
       recentPatternMemory: this.config.recentPatternMemory,
       riderEnvelope: this.envelope,
+      gapMinPx: Math.round(band[0] * this.config.cruiseSpeedPx * gapScale),
+      gapMaxPx: Math.round(band[1] * this.config.cruiseSpeedPx * gapScale),
+      patternBand: lerp(this.config.patternBandEasy, this.config.patternBandHard,
+        levelIntensity / Math.max(1e-6, this.config.levelCap)),
+      scenicRecovery: wave.recovery && progress < this.config.safeApproachFrom,
     };
+  }
+
+  /** Phase 11 — per-level seconds-between-challenges design bands. */
+  private gapSecondsBand(levelNumber: number): readonly [number, number] {
+    const { gapSeconds } = this.config;
+    if (levelNumber <= 1) return gapSeconds.level1;
+    if (levelNumber <= 4) return gapSeconds.levels2to4;
+    if (levelNumber <= 10) return gapSeconds.levels5to10;
+    return gapSeconds.levels11Plus;
   }
 
   /** Points remaining until the next recovery valley (0 = inside one now). */

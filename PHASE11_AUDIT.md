@@ -195,3 +195,192 @@ blindly — they remove the specific causes above:
 The obstacle color palette work (per-family palettes, distinct shapes, Canvas
 only, physics untouched) will follow the same phase and be verified in
 rendered gameplay.
+
+---
+
+# Phase 11 AFTER Measurements (implementation complete)
+
+Same harness, same bot, same levels × seeds, same 26,000 px of active riding
+per ride — **780,163 px total** (BEFORE: 780,165). Ice patches count as
+challenges (traction change), exactly as in the BEFORE kind totals. Rides
+cross level boundaries through the house cinematic, as before.
+
+## Measured AFTER (per level, 3 seeds averaged)
+
+| Level | Challenges /1000 px | Median gap @ natural cruise | Worst max gap | Unique kinds / ride |
+|---|---|---|---|---|
+| L1 | 0.35 | 8.0 s | 26.3 s | 5 |
+| L2 | 0.44 | 7.3 s | 27.8 s | 4–5 |
+| L3 | 0.42 | 7.1 s | 28.2 s | 4 |
+| L4 | 0.49 | 6.5 s | 17.6 s | 5–6 |
+| L5 | 0.49 | 5.4 s | 16.3 s | 4–7 |
+| L10 | 0.44 | 6.0 s | 26.5 s | 4–7 |
+| L20 | **0.59** | 5.5 s | 15.0 s | **7–8** |
+| L50 | **0.58** | 5.8 s | **15.2 s** | 5–7 |
+| L100 | **0.58** | 5.8 s | **13.9 s** | 3–8 |
+| L500 | **0.58** | 6.0 s | **16.2 s** | 4–6 |
+
+vs BEFORE: density rises monotonically with level (0.35 → 0.59; BEFORE was
+0.37 → 0.50 with an L3 dip to 0.27). The worst dead stretches shrink from
+41.6 s (L3) / 35.9 s (L2) / 28.9 s (L500) to 28.2 / 27.8 / 16.2 s. Median
+gaps at L3 improve 8.2 → 7.1 s and L5–L500 all tighten (6.6→5.4, 7.6→6.0,
+6.0→5.5, 6.4→5.8, 6.8→5.8, 6.0→6.0). L1's median (8.0 s) sits inside its
+6–10 s tutorial band by design.
+
+**Honest residuals:** ride-level medians include the designed structural
+exclusions — level-start safe zones, the house cinematic (~1.2 kpx), the
+final safe approach, calm-journey windows (deliberately hazard-free) and
+scenic wave valleys. That is why L2/L3 medians land ~0.1–0.3 s above their
+4–7 s band and L11+ ~0.5–1.0 s above 2.5–5 s even though the planner's
+own band spacing is enforced inside those bands (verified by the pacing
+and difficulty suites). L1/L10 worst-case stretches (26 s) are single
+calm-window stacks, not recovery chains — chains are bounded at ≤ 2 slots.
+
+## What actually appears (AFTER, same 780 kpx)
+
+Objects placed: **log 110, rock 103, gap 54 (incl. cliff/broken-bridge
+variants), root 41, tree 23, ramp 20, fence 13, ice 10, swinging-log 5,
+branch 4, icicle 1, snowball 1.** The four moving/timed families went from
+7 → 11 objects and, more importantly, their *patterns* now place reliably
+(warned-swinging-log 6, falling-branch 4, snowball-roll 2, icicle-drop 1
+selections; cliff-jump 3, broken-bridge 10, moving-platform 10, vs BEFORE
+2/6/8). Rope-bridge 16. Every family that is eligible for an environment
+now appears; the remaining rarity of snowball/icicle is their intentional
+environment gating (snowy/jungle only) plus the classic-prefix unlock
+ladder, which is preserved.
+
+Pattern selection over 656 plan calls: recovery 248 (37.8% — down from
+41.1%, and now almost entirely *deliberate*: calm events and scenic
+valleys), single-rock 87, single-log 56, small-gap 41, single-tree 32,
+log-recovery 27, rope-bridge 16, double-logs 15, root-pair 14, ramp-gap 14,
+advanced-static-sequence 14, ice-patch 11, controlled-ramp 11,
+broken-bridge 10, moving-platform 10, single-fence 8, warned-swinging-log 6,
+fence-then-rock 5, falling-branch 4, downhill-rock 4, cliff-jump 3,
+snowball-roll 2, icicle-drop 1 — 23 distinct patterns, no dead chains
+(max consecutive recovery = 2 except inside deliberate calm windows).
+
+Placement rejections: 110 total, same signature as BEFORE (jump-intersect
+75, downhill-surface 23, retry-budget 10, ice-drift 1, ramp-steep 1) —
+these are internal retries that end in a successful placement elsewhere.
+**Runtime fairness violations: 0 across all 30 rides** (BEFORE: 0; and the
+independent validator now re-validates 2,964 placements across bands with
+zero violations and a 0.95 s minimum reaction window at max speed).
+
+## Root causes fixed (mapped to the audit's causes 1–8)
+
+1. Recovery is bounded (≤ 2 in the recent window, never consecutive) and
+   recovery slots are visible to the repetition memory; ordinary recovery
+   slots consume their band slot without adding distance (the old
+   0.9–1.15 × gapMax span stacked on top of the band and doubled effective
+   gaps); scenic beats tightened to 1.2–1.7 × gapMax. Deliberate calm
+   windows keep their hazard-free identity.
+2. The inter-obstacle budget comes from per-level frequency bands
+   (L1 6–10 s, L2–4 4–7 s, L5–10 3–6 s, L11+ 2.5–5 s at the measured
+   natural cruise ≈ 285 px/s), shaped by pacing zones and waves; physics
+   floors (reaction, corridors, danger recovery) always win underneath.
+3. The rating band widens with intensity (σ = patternBand) and every
+   eligible family gets a floor weight when absent from the recent
+   schedule.
+4. Environment identity: env-specific gates (misty broken-bridge/platform,
+   moonlit branch/swing, snowy snowball) open from L5 — never inside the
+   classic L1–4 prefix, which keeps its tuned gentle identity.
+5. L1 keeps the no-ramp rule; its band (6–10 s) now actually delivers
+   variety (5 distinct kinds per ride vs 4–5).
+6. Crest-launch fairness: `validateGapAgainstCrestLaunch` rejects gap
+   placements whose approach crest would ballistic a max-speed rider into
+   the chasm; elevated coins are never placed where their collecting arc
+   lands in an unbridged gap.
+7. Rejection reasons/counts remain recorded; the dev overlay gained
+   PACING / TYPES / ATTEMPTS / SAFE-ZONE rows (dev-only, off in
+   production).
+8. Determinism preserved: same seeds replay identically (restart
+   determinism suite green).
+
+The 5th environment (jungle) joins the rotation from L5, so L5+ level
+identities differ from the 10D build for the same seeds (deterministic,
+cosmetic checkpoint-name shifts only).
+
+---
+
+# Phase 11 Rendered-Gameplay Verification (real browser, final build)
+
+Method: the production bundle and the vite dev build were driven in headless
+Chromium (real canvas rasterization, no mocks). Three rigs:
+
+1. **Production rides** — full app (menu → play → ride), 5 forced themes via
+   a seeded journey save; console/page errors captured; canvas pixels sampled
+   per ~0.4 s for theme palettes, ambient balloons, and set-piece signatures.
+2. **Dev-server rides** (`?debugObstacles=1`, dev-only overlay) — the
+   overlay's pink collision boxes locate every on-screen hazard; each box's
+   interior colour is compared against the background 44 px to its right
+   (ΔRGB). Rides used a marker-aware jump bot with crash-card restarts.
+3. **Scenario mode** — the real engine module constructed on a real
+   Chromium canvas inside the page, driven exactly like the visual-suite
+   harness (invulnerable, speed 475, controllerJump, manual frame clock kept
+   ahead of `performance.now()`), with a waterfall/tunnel injected at a
+   known position; the resulting pixels measured directly.
+
+## Results (final build, after the colour fixes below)
+
+- **Zero console errors and zero page errors** across all five themes —
+  including the crash/revive/restart cycle and level transitions.
+- **Themes render distinctly** (canvas pixel-class fractions, production):
+  countryside 49 % green, snowy 97 % blue-white, misty 21 % green + gray
+  mist, moonlit 100 % deep blue, jungle 69 % green (+4.8 % warm accents,
+  highest palette diversity of all themes at 166 distinct colour buckets).
+- **Ambient hot-air balloons render in every theme** (saturated warm blobs
+  in the sky band, 12–22 sampled rows per ride), in production builds.
+- **Waterfall set-piece (verified in scenario mode):** the cascade renders
+  as a white-blue column — measured (205, 222, 235) at the top fading to
+  (170, 190, 203) low down — 88 px wide (44 bright columns), 256–268 px
+  vertical bright runs, against the grey-blue cliff slab (luminance ~106–159
+  to its left) with the translucent curtain and mist pool over it. Before
+  the fix the same pixels measured orange-brown (197, 127, 29) — see below.
+- **Tunnel set-piece (verified in production and scenario mode):** once the
+  950–1500 px interior covers the viewport, 140–211 of the sampled columns
+  are the dark interior; the warm lit-exit glow rises through the pass
+  (24 → 33 → 48 warm pixels sampled approach → inside → exit) and the
+  in-tunnel veil dims the world as designed.
+- **Obstacle/background distinguishability** (dev overlay marker boxes,
+  interior vs adjacent background, ΔRGB; n = boxes measured across rides):
+  countryside median 45 / p90 50 (n = 424), snowy 67 / 109 (n = 634),
+  misty 89 / 98 (n = 443), moonlit 105 / 133 (n = 193), jungle 47 / 59
+  (n = 435). 5–22 % of boxes measure below ΔRGB 40 — the low tail is
+  dominated by gap boxes whose "background" sample lands inside the same
+  long chasm (a measurement artifact, not an obstacle-visibility failure);
+  every measured box was ≥ ΔRGB 10. No family rendered invisible against
+  its terrain in any theme.
+- **Dev overlay discipline:** the production bundle ignores
+  `?debugObstacles=1` entirely (verified: no overlay text drawn, no fillText
+  calls — the parameter is devTools-gated by design); the dev build draws
+  the full 13-row telemetry block (PACING / TYPES / ATTEMPTS / SAFE ZONE /
+  FAIR / PERF …) plus the marker boxes.
+
+## Bugs found by the rendered pass (fixed this session)
+
+1. **`alphaColor` could not parse hex colours** (engine-local helper). The
+   Phase 11 set-piece gradients pass literal hex (`#e8f4ff`, `#dff2ff`,
+   `#0a0e18`…); the old `color.match(/\d+/g)` scrape turned `#e8f4ff` into
+   `rgba(8, 4, undefined, 0.75)` — a thrown `addColorStop` error visible in
+   the production console (4 of 7 first-pass rides). First fix removed the
+   throw but introduced an off-by-one (slicing the captured hex group —
+   which excludes the `#` — at offsets [1, 3, 5]), silently turning the
+   waterfall into orange-brown sludge: `#dff2ff` → (255, 47, 15). The final
+   fix parses the captured group at [0, 2, 4]; pixel-verified correct
+   white-blue water, and the production console is clean.
+2. **Dev marker strokes were 1 px** and anti-aliased below reliable
+   detection; bumped to 3 px in the dev-only overlay path (never rendered
+   in production).
+
+## Honest scope notes
+
+- The waterfall pixel signature was verified in scenario mode (identical
+  rendering code path, real Chromium rasterizer) and the fix's presence
+  confirmed in the minified production bundle; the blind production bot
+  could not survive the ~400 m approach ride to film one organically. The
+  tunnel was verified directly in a production ride.
+- Obstacle-contrast figures come from the dev build with the overlay
+  enabled; the overlay draws after the world, so measured colours are the
+  production colours (markers are excluded from the sampled interiors).
+- The QA rigs live outside the repository (`/tmp`); nothing in `src/`
+  is test-only or QA-hooked beyond the existing devTools-gated parameters.

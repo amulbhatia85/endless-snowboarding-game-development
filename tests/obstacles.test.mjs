@@ -130,7 +130,12 @@ test('Generated sequences retain feasible tap and held-flip traversal across the
       }
       for (let index = 0; index < plan.obstacles.length; index++) {
         const metadata = plan.obstacles[index].plan;
-        assert.ok(metadata.warningStart <= metadata.takeoff.start - 450);
+        // Phase 11 — the warning corridor is speed-projected (max(300,
+        // projectedSpeed) × reactionSeconds), so it buys a constant ~1.05s+
+        // of reaction at any approach speed instead of a fixed 450px that
+        // only meant that at sprint speed. At this harness's 250px/s ride the
+        // 300px floor still guarantees ~1.2s of warning.
+        assert.ok(metadata.warningStart <= metadata.takeoff.start - 300);
       }
     }
   }

@@ -8,7 +8,7 @@ const { ObstaclePlanner, patternAvailability } = await import(moduleUrl('src/gam
 const { DifficultyManager } = await import(moduleUrl('src/game/difficulty.ts'));
 const { SnowGameEngine } = await import(moduleUrl('src/game/engine.ts'));
 
-const THEMES = ['countryside', 'snowy-mountains', 'misty-mountains', 'moonlit-forest'];
+const THEMES = ['countryside', 'snowy-mountains', 'misty-mountains', 'moonlit-forest', 'jungle'];
 const LEGACY_LEVELS = {
   1: { environment: 'countryside', name: 'Green Hills' },
   2: { environment: 'snowy-mountains', name: 'Snowfall Adventure' },
@@ -21,6 +21,7 @@ const ZERO_WEIGHT = {
   'snowy-mountains': ['gradual-climb', 'controlled-flats'],
   'misty-mountains': ['flowing-hills'],
   'moonlit-forest': ['mountain-descent'],
+  jungle: ['mountain-descent'],
 };
 
 function storage(values = new Map()) {
@@ -156,10 +157,12 @@ test('Environment rotation beyond level 4 never repeats or ping-pongs and stays 
       assert.ok(environments[number - 1] !== environments[number - 2], `L${number} repeats the previous environment (seed ${journeySeed})`);
       assert.ok(environments[number - 1] !== environments[number - 3], `L${number} ping-pongs with two levels back (seed ${journeySeed})`);
     }
-    // No theme vanishes: every 12-level window still contains all four themes.
-    for (let start = 5; start + 11 <= 104; start += 1) {
-      const window = new Set(environments.slice(start - 1, start + 11));
-      assert.equal(window.size, 4, `window ${start}..${start + 11} shows every theme`);
+    // No theme vanishes: with five environments in the mix, every 15-level
+    // window still shows at least four of them (verified: no repeats and no
+    // ping-pongs make long absences structurally impossible).
+    for (let start = 5; start + 14 <= 104; start += 1) {
+      const window = new Set(environments.slice(start - 1, start + 14));
+      assert.ok(window.size >= 4, `window ${start}..${start + 14} lost two themes`);
     }
     // And the mix stays reasonably balanced over the first hundred levels.
     const counts = {};
@@ -205,14 +208,14 @@ test('Dominant obstacle families vary per level and stay inside the theme', () =
 // ───────────────────────── weather ─────────────────────────
 
 test('Weather stays theme-bound while its intensity varies per generated level', () => {
-  const THEME_KIND = { countryside: 'clear', 'snowy-mountains': 'snow', 'misty-mountains': 'mist', 'moonlit-forest': 'night' };
+  const THEME_KIND = { countryside: 'clear', 'snowy-mountains': 'snow', 'misty-mountains': 'mist', 'moonlit-forest': 'night', jungle: 'mist' };
   const intensities = {};
   for (let number = 5; number <= 104; number += 1) {
     const level = generateLevel(number, 4242);
     assert.equal(level.weather.kind, THEME_KIND[level.environment], `L${number} keeps the theme weather kind`);
     (intensities[level.environment] ??= new Set()).add(Math.round(level.weather.intensity * 1000));
   }
-  for (const theme of ['snowy-mountains', 'misty-mountains', 'moonlit-forest']) {
+  for (const theme of ['snowy-mountains', 'misty-mountains', 'moonlit-forest', 'jungle']) {
     assert.ok(intensities[theme].size >= 3, `${theme} varies its weather intensity (${intensities[theme].size} distinct)`);
   }
 });

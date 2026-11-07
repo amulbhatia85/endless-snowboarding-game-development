@@ -123,6 +123,33 @@ function rideUntil(game, predicate, { maxFrames = 5000, speed = 475, invulSecond
   return -1;
 }
 
+/** Phase 11 — rides like ride() but records the planned pattern sequence
+ * from lastPlanInfo (which updates on every successful plan). The repetition
+ * memory's cap makes recentPatterns slices roll over mid-ride, so this is the
+ * faithful record of what the planner actually scheduled. */
+function rideCollecting(game, frames, { speed = 475, invulSeconds = 10 } = {}) {
+  const run = game.run;
+  run.elapsed = Math.max(run.elapsed, 5);
+  let time = game.__rideTime ?? 0;
+  const planned = [];
+  let lastStamp = null;
+  for (let index = 0; index < frames; index += 1) {
+    run.invulnerableUntil = run.elapsed + invulSeconds;
+    run.rider.speed = speed;
+    autoJump(game);
+    time += 1000 / 60;
+    game.__rideTime = time;
+    game.frame(time);
+    const info = game.lastPlanInfo;
+    const stamp = info ? `${info.patternId}@${Math.round(info.spacing)}` : null;
+    if (stamp && stamp !== lastStamp) {
+      planned.push(info.patternId);
+      lastStamp = stamp;
+    }
+  }
+  return planned;
+}
+
 function seedForEnvironment(number, theme) {
   for (let seed = 1; seed < 500; seed += 1) {
     if (generateLevel(number, seed).environment === theme) return seed;
@@ -451,9 +478,10 @@ test('Mountain crossings schedule validated bridges across the gaps', () => {
   assert.ok(reached >= 0, 'crossing window reached');
   const run = game.run;
   const window = activeWindow(game);
-  const patternsBefore = run.recentPatterns.length;
-  ride(game, 700);
-  const slice = run.recentPatterns.slice(patternsBefore);
+  // Phase 11 — the repetition memory is capped and rolls over mid-ride, so
+  // the planned sequence is tracked from lastPlanInfo (updated on every
+  // successful plan) instead of diffing recentPatterns slices.
+  const slice = rideCollecting(game, 700);
   const bridges = slice.filter((id) => ['rope-bridge', 'broken-bridge', 'moving-platform'].includes(id));
   assert.ok(bridges.length >= 1, `bridge patterns scheduled (${slice.join(',')})`);
   for (const object of run.objects) {
@@ -469,9 +497,8 @@ test('Rare challenges run hot with recovery room', () => {
   const reached = rideUntil(game, () => game.events.current?.eventId === 'rare-challenge' && game.events.current.intensity > 0.9);
   assert.ok(reached >= 0, 'challenge window reached');
   const run = game.run;
-  const patternsBefore = run.recentPatterns.length;
-  ride(game, 800);
-  const slice = run.recentPatterns.slice(patternsBefore);
+  // Phase 11 — planned sequence from lastPlanInfo (see rideCollecting).
+  const slice = rideCollecting(game, 800);
   const hot = slice.filter((id) => (patternRating(id) ?? 0) >= 0.6);
   assert.ok(hot.length >= 2, `dangerous patterns scheduled (${slice.join(',')})`);
   const manager = new EventManager();
@@ -488,11 +515,10 @@ test('Falling hazards reuse the existing timed drops per theme', () => {
   game.setEventPreview('falling-hazards');
   let reached = rideUntil(game, () => game.events.current?.eventId === 'falling-hazards' && game.events.current.intensity > 0.9);
   assert.ok(reached >= 0, 'falling hazards window reached (snowy)');
-  let run = game.run;
-  let before = run.recentPatterns.length;
-  ride(game, 600);
-  assert.ok(run.recentPatterns.slice(before).includes('icicle-drop'),
-    `icicle drops scheduled (${run.recentPatterns.slice(before).join(',')})`);
+  // Phase 11 — planned sequence from lastPlanInfo (see rideCollecting).
+  let planned = rideCollecting(game, 600);
+  assert.ok(planned.includes('icicle-drop'),
+    `icicle drops scheduled (${planned.join(',')})`);
 
   const moonlitSeed = seedForEnvironment(25, 'moonlit-forest');
   const { game: moonlit } = makeEngine({ save: seedSave(moonlitSeed, 25) });
@@ -500,11 +526,9 @@ test('Falling hazards reuse the existing timed drops per theme', () => {
   moonlit.setEventPreview('falling-hazards');
   reached = rideUntil(moonlit, () => moonlit.events.current?.eventId === 'falling-hazards' && moonlit.events.current.intensity > 0.9);
   assert.ok(reached >= 0, 'falling hazards window reached (moonlit)');
-  run = moonlit.run;
-  before = run.recentPatterns.length;
-  ride(moonlit, 600);
-  assert.ok(moonlit.run.recentPatterns.slice(before).includes('falling-branch'),
-    `falling branches scheduled (${moonlit.run.recentPatterns.slice(before).join(',')})`);
+  planned = rideCollecting(moonlit, 600);
+  assert.ok(planned.includes('falling-branch'),
+    `falling branches scheduled (${planned.join(',')})`);
 });
 
 test('No events run during house transitions; the next level starts clean', () => {
