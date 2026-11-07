@@ -70,9 +70,7 @@ export type SoundEvent =
   /** Phase 10B — safe-house door, synced to the door animation. */
   | { type: 'door'; phase: 'open' | 'close' }
   /** Phase 10B — level completion (rider settles inside the safe house). */
-  | { type: 'complete' }
-  /** Phase 11 — immersive set-piece ambience (tunnel echo). */
-  | { type: 'setpiece'; kind: 'tunnel'; phase: 'enter' | 'exit' };
+  | { type: 'complete' };
 
 export interface AudioFrameState {
   status: GameScreen;
@@ -157,16 +155,6 @@ interface Rider {
   fallingInto?: Obstacle;
 }
 
-/** Phase 11 — immersive scenery set-pieces (long tunnels). Purely cosmetic:
- * no collision, no physics, no gameplay effect; they are placed
- * deterministically and skip every reserved safe zone. */
-interface SetPiece {
-  kind: 'tunnel';
-  x: number;
-  width: number;
-  /** Seeded 0..1 draw driving per-instance variation. */
-  variant: number;
-}
 
 interface RunState {
   rider: Rider;
@@ -194,8 +182,6 @@ interface RunState {
   /** Phase 5 pacing memory: recently scheduled pattern ids (oldest first). */
   recentPatterns?: string[];
   /** Phase 11 — scheduled scenery set-pieces ahead of the rider. */
-  setPieces?: SetPiece[];
-  nextSetPieceX?: number;
   magnetUntil: number;
   doubleUntil: number;
   shield: boolean;
@@ -284,11 +270,6 @@ function isRunCheckpoint(value: unknown): value is RunState {
   if (run.recentPatterns !== undefined && (!Array.isArray(run.recentPatterns) || run.recentPatterns.length > 16
     || !run.recentPatterns.every((id) => typeof id === 'string'
       && (id === 'recovery' || OBSTACLE_PATTERNS.some((pattern) => pattern.id === id))))) return false;
-  if (run.setPieces !== undefined && (!Array.isArray(run.setPieces) || run.setPieces.length > 64
-    || !run.setPieces.every((piece) => piece && piece.kind === 'tunnel'
-      && finite(piece.x) && piece.x >= 0 && finite(piece.width) && piece.width >= 200 && piece.width <= 4000
-      && finite(piece.variant) && piece.variant >= 0 && piece.variant <= 1))) return false;
-  if (run.nextSetPieceX !== undefined && !nonnegative(run.nextSetPieceX)) return false;
   if (run.terrainOrigins !== undefined && (!Array.isArray(run.terrainOrigins) || run.terrainOrigins.length === 0
     || !run.terrainOrigins.every((origin, index) => origin && Number.isSafeInteger(origin.level)
       && origin.level >= 1 && nonnegative(origin.x) && finite(origin.offset)
@@ -439,8 +420,6 @@ export class SnowGameEngine {
   private readonly difficulty = new DifficultyManager();
   private lastDirective?: DifficultyDirective;
   private lastPlanInfo: { patternId: string; rating: number; spacing: number } | null = null;
-  /** Phase 11 — set-piece the rider is currently inside (for enter/exit cues). */
-  private activeSetPieceKind: SetPiece['kind'] | null = null;
   /** Phase 11 — dev-overlay pacing telemetry: scheduled challenges + counters. */
   private placementTelemetry: { x: number; kind: string }[] = [];
   private planAttempts = 0;
@@ -699,8 +678,6 @@ export class SnowGameEngine {
       nextPowerX: 760,
       powerIndex: 0,
       recentPatterns: [],
-      setPieces: [],
-      nextSetPieceX: 4200,
       magnetUntil: 0,
       doubleUntil: 0,
       shield: false,
@@ -1531,45 +1508,6 @@ export class SnowGameEngine {
     }
 
     run.objects = run.objects.filter((object) => object.x + (object.width ?? 50) > run.rider.x - this.width * 0.9);
-    this.scheduleSetPieces(run, ahead);
-  }
-
-  /**
-   * Phase 11 — deterministic scenery set-pieces: long tunnels to ride
-   * through. Purely cosmetic (no collision, no physics, no scoring); they
-   * skip every reserved safe zone (level start, houses) and never appear
-   * during the safe approach. (Waterfall crossings were removed after
-   * playtest feedback — every environment uses the tunnel.)
-   */
-  private scheduleSetPieces(run: RunState, ahead: number): void {
-    run.setPieces ??= [];
-    const reserved = [
-      { start: run.levelStartX - 120, end: run.levelStartX + 1600 },
-      ...run.houses.map((house) => ({ start: house.x - 1600, end: house.x + 900 })),
-    ];
-    while ((run.nextSetPieceX ?? run.levelStartX + 4200) < ahead) {
-      const x = run.nextSetPieceX ?? run.levelStartX + 4200;
-      const random = createLevelRandom(this.levels.current.seed ^ Math.floor(x) ^ 0x5e712ce);
-      const blocked = reserved.find((region) => x + 1400 > region.start && x < region.end);
-      if (blocked) {
-        run.nextSetPieceX = blocked.end + 400 + random() * 600;
-        continue;
-      }
-      const width = 950 + random() * 550;
-      run.setPieces.push({ kind: 'tunnel', x, width, variant: random() });
-      run.nextSetPieceX = x + width + 9000 + random() * 6000;
-    }
-    if (run.setPieces.length > 8) {
-      run.setPieces = run.setPieces.filter((piece) => piece.x + piece.width > run.rider.x - this.width);
-    }
-  }
-
-  /** The set-piece the rider is currently inside (null = open air). */
-  private setPieceAt(run: RunState, x: number): SetPiece | null {
-    for (const piece of run.setPieces ?? []) {
-      if (x >= piece.x && x <= piece.x + piece.width) return piece;
-    }
-    return null;
   }
 
   private rampAt(run: RunState, x: number): Obstacle | undefined {
@@ -1761,15 +1699,6 @@ export class SnowGameEngine {
     if (run.over) return;
 
     run.distance = Math.max(run.distance, rider.x);
-    // Phase 11 — set-piece ambience: crossing a tunnel boundary fires
-    // exactly one enter/exit cue pair.
-    const insidePiece = this.setPieceAt(run, rider.x);
-    const insideKind = insidePiece?.kind ?? null;
-    if (insideKind !== this.activeSetPieceKind) {
-      if (this.activeSetPieceKind) this.emit({ type: 'setpiece', kind: this.activeSetPieceKind, phase: 'exit' });
-      if (insideKind) this.emit({ type: 'setpiece', kind: insideKind, phase: 'enter' });
-      this.activeSetPieceKind = insideKind;
-    }
     this.collectPickups(run, delta);
     if (!run.missionComplete && this.missionProgress(run) >= run.mission.target) {
       run.missionComplete = true;
@@ -1927,11 +1856,6 @@ export class SnowGameEngine {
         run.terrainOrigins.push({ level: nextLevel.number, x: rider.x, offset: house.groundY - this.height * 0.605 });
         this.terrain = this.createTerrain(run.terrainOrigins);
         run.hazardClearUntil = rider.x + 640;
-        // Phase 11 — set-pieces get their designed first-window offset in
-        // the new level (the cursor would otherwise leak across the
-        // transition and starve early levels of scenery). nextHazardX is
-        // reset when the exit ride resumes, just below.
-        run.nextSetPieceX = Math.max(run.nextSetPieceX ?? rider.x + 4200, rider.x + 4200);
         run.levelPhase = 'exiting';
         run.sceneTime = 0;
         run.riderOpacity = 0;
@@ -2479,9 +2403,6 @@ export class SnowGameEngine {
     this.environment.drawGroundDetail(context, view, palette);
     this.environment.drawDecorations(context, view, this.decorationReserved, palette);
     if (run && !isMenu) this.drawTrail(context, run, cameraX, palette);
-    // Phase 11 — set-piece backdrops (tunnel interiors)
-    // sit behind the gameplay objects and the rider.
-    if (run && !isMenu) this.drawSetPiecesBack(context, run, cameraX, palette);
     if (run && !isMenu) this.drawObjects(context, run, cameraX, palette);
     if (run && !isMenu) this.drawParticles(context, run, cameraX);
     const airTime = isMenu ? 0 : run.rider.airTime;
@@ -2489,9 +2410,6 @@ export class SnowGameEngine {
     context.globalAlpha = isMenu ? 1 : run.riderOpacity;
     this.drawRider(context, rider.x - cameraX, rider.y, rider.rotation, rider.grounded, isMenu, rider.x, airTime);
     context.restore();
-    // Phase 11 — set-piece foregrounds: tunnel arch ribs pass in front of
-    // the rider so the crossing reads as riding through the piece.
-    if (run && !isMenu) this.drawSetPiecesFront(context, run, cameraX, palette);
     if (run && !isMenu) this.drawPopups(context, run, cameraX);
     if (run && !isMenu && this.obstacleDebug) this.drawObstacleDebug(context, run, cameraX);
     this.environment.drawAmbient(context, view);
@@ -3212,87 +3130,6 @@ export class SnowGameEngine {
         this.drawSnowyLog(context, 0, 11, palette);
         context.restore();
       }
-    }
-  }
-
-  /**
-   * Phase 11 — set-piece backdrops, drawn behind objects and rider.
-   * Tunnels: a dark interior with timber supports and a lit far exit.
-   */
-  private drawSetPiecesBack(context: CanvasRenderingContext2D, run: RunState, cameraX: number, palette: Palette): void {
-    for (const piece of run.setPieces ?? []) {
-      const x = piece.x - cameraX;
-      if (x + piece.width < -160 || x > this.width + 160) continue;
-      const entranceX = piece.x;
-      const groundY = this.terrainAt(entranceX + piece.width * 0.5);
-      if (piece.kind === 'tunnel') {
-        const height = 250 + piece.variant * 90;
-        const interior = context.createLinearGradient(0, groundY - height, 0, groundY);
-        interior.addColorStop(0, alphaColor(colorMix(palette.near, '#141821', 0.82), 0.98));
-        interior.addColorStop(1, alphaColor(colorMix(palette.near, '#1c2230', 0.72), 0.92));
-        context.fillStyle = interior;
-        context.fillRect(x, groundY - height, piece.width, height);
-        // Timber supports every 190 px.
-        context.strokeStyle = alphaColor(colorMix(palette.snowShade, '#3a2f24', 0.55), 0.5);
-        context.lineWidth = 7;
-        for (let rib = 0; rib * 190 < piece.width; rib += 1) {
-          const ribX = x + 60 + rib * 190;
-          context.beginPath();
-          context.moveTo(ribX, groundY);
-          context.lineTo(ribX, groundY - height + 26);
-          context.stroke();
-        }
-        // The lit exit: a warm glow band at the far end.
-        const exitGlow = context.createLinearGradient(x + piece.width - 190, 0, x + piece.width, 0);
-        exitGlow.addColorStop(0, alphaColor(palette.glow, 0));
-        exitGlow.addColorStop(1, alphaColor(palette.glow, 0.34 + (1 - palette.night) * 0.22));
-        context.fillStyle = exitGlow;
-        context.fillRect(x + piece.width - 190, groundY - height, 190, height);
-      }
-    }
-  }
-
-  /**
-   * Phase 11 — set-piece foregrounds, drawn over the rider: tunnel arch ribs
-   * and the dimming veil while inside.
-   */
-  private drawSetPiecesFront(context: CanvasRenderingContext2D, run: RunState, cameraX: number, palette: Palette): void {
-    if (this.lighterGraphics) return;
-    for (const piece of run.setPieces ?? []) {
-      const x = piece.x - cameraX;
-      if (x + piece.width < -160 || x > this.width + 160) continue;
-      const midX = piece.x + piece.width * 0.5;
-      const groundY = this.terrainAt(midX);
-      if (piece.kind === 'tunnel') {
-        const height = 250 + piece.variant * 90;
-        // Portal mouths at both ends.
-        for (const mouthX of [x, x + piece.width - 64]) {
-          context.fillStyle = alphaColor(colorMix(palette.near, '#232a38', 0.68), 0.96);
-          context.fillRect(mouthX, groundY - height - 34, 64, height + 34);
-          context.strokeStyle = alphaColor('#c9b28f', 0.55);
-          context.lineWidth = 5;
-          context.beginPath();
-          context.arc(mouthX + 32, groundY - 10, height * 0.52, Math.PI, TAU);
-          context.stroke();
-        }
-        // Interior ribs passing in front of the rider.
-        context.strokeStyle = alphaColor(colorMix(palette.near, '#10141d', 0.8), 0.72);
-        context.lineWidth = 12;
-        for (let rib = 1; rib * 190 < piece.width - 40; rib += 1) {
-          const ribX = x + 60 + rib * 190;
-          context.beginPath();
-          context.arc(ribX, groundY + 26, height * 0.66, Math.PI * 1.08, Math.PI * 1.92);
-          context.stroke();
-        }
-      }
-    }
-    // While inside a tunnel the world dims slightly and the exit brightens —
-    // a cinematic beat with zero gameplay effect.
-    const inside = this.setPieceAt(run, run.rider.x);
-    if (inside && inside.kind === 'tunnel') {
-      const depth = Math.sin(Math.min(1, Math.max(0, (run.rider.x - inside.x) / inside.width)) * Math.PI);
-      context.fillStyle = alphaColor('#0a0e18', 0.3 * depth);
-      context.fillRect(0, 0, this.width, this.height);
     }
   }
 

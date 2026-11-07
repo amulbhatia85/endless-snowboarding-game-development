@@ -897,17 +897,6 @@ export class AudioManager {
       case 'door':
         this.door(e.phase === 'open');
         break;
-      case 'setpiece': {
-        // Phase 11 — immersive set-piece ambience. Entering a tunnel is a
-        // muffled low rumble that opens back up on exit.
-        if (e.phase === 'enter') {
-          this.noiseHit({ dur: 1.1, type: 'lowpass', f0: 700, f1: 190, gain: 0.11, attack: 0.35 });
-          this.tone({ freq: 96, freqEnd: 62, dur: 0.9, gain: 0.05 });
-        } else {
-          this.noiseHit({ dur: 0.7, type: 'bandpass', f0: 500, f1: 2200, q: 0.9, gain: 0.09, attack: 0.12 });
-        }
-        break;
-      }
       case 'complete':
         this.levelComplete();
         break;

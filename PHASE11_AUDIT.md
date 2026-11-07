@@ -476,3 +476,39 @@ Fairness contract unchanged: every hazard remains clearable by a
 minimum-speed jump timed within the ±8 px margin, at every swing phase,
 on flat and sloped ground, tap and held — enforced by the same
 validators, now tuned to the smaller arc.
+
+---
+
+# Tunnel Removal (playtest feedback)
+
+**Tunnels removed from the game.** The set-piece system is gone in its
+entirety: the `SetPiece` state and scheduler (`scheduleSetPieces`,
+`setPieceAt`), the tunnel interior/arch-rib/in-tunnel-dimming render
+passes (`drawSetPiecesBack`/`drawSetPiecesFront`), the `setpiece`
+enter/exit engine event and its audio echo cue, the run-state and
+checkpoint validation for set-piece fields, and the level-transition
+set-piece cursor reset. Nothing else changed: obstacle planning, terrain,
+coins, houses, checkpoints and the jump tuning are untouched (set-pieces
+were purely cosmetic and never interacted with placement).
+
+Old checkpoints that still carry `setPieces`/`nextSetPieceX` fields load
+fine — the deserializer ignores unknown fields and nothing reads them.
+
+## Verification
+
+- Full suite 245/245 green, tsc clean; zero references to
+  tunnel/set-piece code remain in `src/`.
+- Production bundle: all six tunnel draw colours (`#141821`, `#1c2230`,
+  `#3a2f24`, `#c9b28f`, `#10141d`, `#0a0e18`) present in the previous
+  build are absent from the new one; no `setpiece` strings. The bundle
+  shrank by ~3.3 kB.
+- Deterministic engine ride (real engine, crash-immunity only):
+  2 421 m across two levels through several former tunnel windows — the
+  run state never contains set-piece fields, zero `setpiece` events,
+  checkpoint round-trip carries no set-piece data.
+- Rendered production rides (real Chromium): five themes × 75 s plus
+  focused far-rides — three gameplay rides crossed 461–468 m, straight
+  through the old first-tunnel window (≈396 m, where a 90–140 m tunnel
+  was previously on screen for ~15 s) — zero dark interior columns
+  detected in ~40 000 sampled frames, zero console errors. Ride
+  screenshots: `qa/phase11-tunnel-removal/`.
