@@ -95,15 +95,6 @@ export interface GroundStyle {
   speckle: string;
 }
 
-/** Phase 11 — ambient hot-air balloons drifting through the sky layer. */
-export interface BalloonStyle {
-  colors: readonly string[];
-  /** Average balloon-space px between balloons (jittered ±35 %). */
-  spacingPx: number;
-  /** Scroll factor relative to the camera (0 = sky-fixed, 1 = terrain speed). */
-  parallax: number;
-}
-
 export interface EnvironmentDefinition {
   id: EnvironmentTheme;
   /** Cyclic day-phase stops; the first and last values match for a seamless wrap. */
@@ -119,8 +110,6 @@ export interface EnvironmentDefinition {
   stars: number;
   shootingStars: boolean;
   flock: boolean;
-  /** Phase 11 — sky balloons; absent = none (purely cosmetic). */
-  balloons: BalloonStyle | null;
   decorations: { entries: ReadonlyArray<{ kind: DecorationKind; weight: number }>; spacing: number };
   decorationColors: { foliage: string; foliageDark: string; accent: string; stone: string };
   ambient: AmbientStyle | null;
@@ -421,7 +410,6 @@ const COUNTRYSIDE: EnvironmentDefinition = {
   stars: 26,
   shootingStars: false,
   flock: true,
-  balloons: { colors: ['#d9634f', '#e8b34b', '#7fae7a', '#e5d9c0'], spacingPx: 1150, parallax: 0.16 },
   decorations: {
     entries: [{ kind: 'grass', weight: 40 }, { kind: 'flower', weight: 10 }, { kind: 'bush', weight: 8 }, { kind: 'pine', weight: 5 }, { kind: 'stone', weight: 2 }],
     spacing: 74,
@@ -483,7 +471,6 @@ const SNOWY: EnvironmentDefinition = {
   stars: 64,
   shootingStars: true,
   flock: false,
-  balloons: { colors: ['#b5432f', '#3f7d8c', '#d9c06b'], spacingPx: 1400, parallax: 0.14 },
   decorations: {
     entries: [{ kind: 'snowy-pine', weight: 16 }, { kind: 'snowy-bush', weight: 8 }, { kind: 'drift', weight: 13 }, { kind: 'stone', weight: 3 }],
     spacing: 105,
@@ -545,7 +532,6 @@ const MISTY: EnvironmentDefinition = {
   stars: 14,
   shootingStars: false,
   flock: true,
-  balloons: { colors: ['#8c6f7d', '#5f7d8c', '#b0a08c'], spacingPx: 1500, parallax: 0.15 },
   decorations: {
     entries: [{ kind: 'fern', weight: 15 }, { kind: 'reed', weight: 9 }, { kind: 'silhouette-pine', weight: 11 }, { kind: 'mossy-rock', weight: 6 }],
     spacing: 98,
@@ -610,7 +596,6 @@ const MOONLIT: EnvironmentDefinition = {
   stars: 84,
   shootingStars: true,
   flock: false,
-  balloons: { colors: ['#c98a3f', '#7d5f9e', '#4b6f8c'], spacingPx: 1600, parallax: 0.15 },
   decorations: {
     entries: [{ kind: 'silhouette-pine', weight: 20 }, { kind: 'glow-shroom', weight: 7 }, { kind: 'stone', weight: 4 }],
     spacing: 92,
@@ -675,7 +660,6 @@ const JUNGLE: EnvironmentDefinition = {
   stars: 40,
   shootingStars: false,
   flock: true,
-  balloons: { colors: ['#e86a4b', '#f0c04b', '#3f9e6f', '#9e5fa8'], spacingPx: 1000, parallax: 0.17 },
   decorations: {
     entries: [{ kind: 'fern', weight: 18 }, { kind: 'bush', weight: 10 }, { kind: 'reed', weight: 8 }, { kind: 'mossy-rock', weight: 6 }, { kind: 'flower', weight: 6 }, { kind: 'silhouette-pine', weight: 8 }],
     spacing: 80,
@@ -737,8 +721,6 @@ export class EnvironmentManager {
   private readonly resolvedLayers: ParallaxLayerStyle[] = [];
   private readonly resolvedVeil: [number, number, number, number] = [0, 0, 0, 0];
   private resolvedClouds = { count: 0, opacity: 0, speed: 0, tint: '#ffffff' };
-  /** Phase 11 — resolved sky-balloon style (null = no balloons). */
-  private resolvedBalloons: BalloonStyle | null = null;
   private resolvedLight = { sun: 0, moon: 0, stars: 0, shootingStars: false, flock: false };
   private resolvedWeather: WeatherEffectConfig[] = [];
   private resolvedAmbient: AmbientStyle = { ...EMPTY_AMBIENT };
@@ -944,7 +926,6 @@ export class EnvironmentManager {
       shootingStars: t >= 0.5 ? (toDef ?? fromDef).shootingStars : fromDef.shootingStars,
       flock: t >= 0.5 ? (toDef ?? fromDef).flock : fromDef.flock,
     };
-    this.resolvedBalloons = t >= 0.5 ? (toDef ?? fromDef).balloons : fromDef.balloons;
 
     const fromWeather = this.from.weather;
     const toWeather = this.to?.weather;
@@ -1891,89 +1872,6 @@ export class EnvironmentManager {
   }
 
   // ───────────────────────── ambient particles ─────────────────────────
-
-  /**
-   * Phase 11 — ambient hot-air balloons drifting through the sky. Fully
-   * deterministic: balloon-space is hashed per bucket, so the same camera
-   * position always shows the same balloons. Purely cosmetic.
-   */
-  drawBalloons(context: CanvasRenderingContext2D, view: EnvironmentView, palette: Palette): void {
-    const style = this.resolvedBalloons;
-    if (!style || !style.colors.length) return;
-    const parallax = style.parallax;
-    // Balloon space scrolls with the parallax factor plus a slow self-drift.
-    const space = view.cameraX * parallax + this.time * 7;
-    const bucket = Math.max(320, style.spacingPx);
-    const first = Math.floor((space - 140) / bucket);
-    const last = Math.ceil((space + view.width + 140) / bucket);
-    const night = palette.night;
-    context.save();
-    for (let index = first; index <= last; index += 1) {
-      const h1 = hash(index * 73 + 11);
-      const h2 = hash(index * 149 + 37);
-      const h3 = hash(index * 281 + 59);
-      const h4 = hash(index * 163 + 97);
-      // ~78 % of buckets carry a balloon; spacing config sets the density.
-      if (h1 > 0.78) continue;
-      const sx = index * bucket + (h2 - 0.5) * bucket * 0.7 - space;
-      const altitude = view.height * (0.14 + h3 * 0.24);
-      const radius = 15 + h4 * 13;
-      const bob = Math.sin(this.time * 0.55 + h2 * TAU) * 7;
-      const color = style.colors[Math.floor(h3 * style.colors.length) % style.colors.length];
-      const alpha = 0.94 - night * 0.42;
-      this.drawBalloon(context, sx, altitude + bob, radius, color, alpha, palette);
-    }
-    context.restore();
-  }
-
-  private drawBalloon(
-    context: CanvasRenderingContext2D, x: number, y: number, radius: number,
-    color: string, alpha: number, palette: Palette,
-  ): void {
-    context.save();
-    context.translate(x, y);
-    context.globalAlpha = alpha;
-    // Envelope — a lit sphere with a soft terminator.
-    const envelope = context.createRadialGradient(-radius * 0.35, -radius * 0.45, radius * 0.15, 0, 0, radius * 1.15);
-    envelope.addColorStop(0, mixColor(color, '#ffffff', 0.38));
-    envelope.addColorStop(0.62, color);
-    envelope.addColorStop(1, mixColor(color, '#2b2436', 0.42));
-    context.fillStyle = envelope;
-    context.beginPath();
-    context.ellipse(0, 0, radius * 0.92, radius, 0, 0, TAU);
-    context.fill();
-    // Gore seams curve down the envelope.
-    context.strokeStyle = alphaColor(mixColor(color, '#2b2436', 0.5), 0.5);
-    context.lineWidth = 1;
-    for (const spread of [-0.5, 0, 0.5]) {
-      context.beginPath();
-      context.ellipse(spread * radius * 0.8, 0, radius * 0.34, radius, 0, -Math.PI * 0.5, Math.PI * 0.5);
-      context.stroke();
-    }
-    // Neck, rigging and basket.
-    context.strokeStyle = alphaColor('#4a3a2c', 0.85);
-    context.lineWidth = 1.2;
-    context.beginPath();
-    context.moveTo(-radius * 0.4, radius * 0.86);
-    context.lineTo(-radius * 0.26, radius * 1.38);
-    context.moveTo(radius * 0.4, radius * 0.86);
-    context.lineTo(radius * 0.26, radius * 1.38);
-    context.stroke();
-    context.fillStyle = mixColor('#6b4a2f', color, 0.18);
-    context.fillRect(-radius * 0.3, radius * 1.36, radius * 0.6, radius * 0.4);
-    // At night the burner glows warm — a small lantern soul for each balloon.
-    if (palette.night > 0.25) {
-      context.globalAlpha = alpha * Math.min(1, (palette.night - 0.25) / 0.5) * (0.7 + 0.3 * Math.sin(this.time * 3.1 + x));
-      const burner = context.createRadialGradient(0, radius * 1.1, 1, 0, radius * 1.1, radius * 0.8);
-      burner.addColorStop(0, 'rgba(255,190,110,0.85)');
-      burner.addColorStop(1, 'rgba(255,190,110,0)');
-      context.fillStyle = burner;
-      context.beginPath();
-      context.arc(0, radius * 1.1, radius * 0.8, 0, TAU);
-      context.fill();
-    }
-    context.restore();
-  }
 
   drawAmbient(context: CanvasRenderingContext2D, view: EnvironmentView): void {
     if (this.ambientActive <= 0) return;

@@ -384,3 +384,24 @@ Chromium (real canvas rasterization, no mocks). Three rigs:
   production colours (markers are excluded from the sampled interiors).
 - The QA rigs live outside the repository (`/tmp`); nothing in `src/`
   is test-only or QA-hooked beyond the existing devTools-gated parameters.
+
+---
+
+# Post-Review Removals (playtest feedback)
+
+- **Waterfall set-pieces removed.** Every environment now schedules the
+  tunnel only (`kind: 'tunnel'`); the cliff/cascade backdrop, the
+  translucent curtain + streaks + mist foreground, the checkpoint shape
+  validation for `'waterfall'`, and the waterfall branch of the set-piece
+  audio cue were all deleted. Scheduling, safe-zone reservation, spacing
+  and the tunnel look are unchanged.
+- **Ambient hot-air balloons removed.** The `BalloonStyle` config, the five
+  theme balloon entries, the resolved style, the draw call between the far
+  layers and the terrain, and the balloon/burner draw code were all
+  deleted.
+
+Verified after removal: full suite 247/247 green, tsc clean, production
+bundle contains no balloon or waterfall code, zero console errors across
+all five themes, tunnels still render (173–211 dark interior columns
+measured in production rides on countryside/snowy/moonlit), and theme
+palettes are unchanged. The production build shrank by ~3.7 kB.

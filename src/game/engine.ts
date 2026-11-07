@@ -71,8 +71,8 @@ export type SoundEvent =
   | { type: 'door'; phase: 'open' | 'close' }
   /** Phase 10B — level completion (rider settles inside the safe house). */
   | { type: 'complete' }
-  /** Phase 11 — immersive set-piece ambience (tunnel echo, waterfall rush). */
-  | { type: 'setpiece'; kind: 'tunnel' | 'waterfall'; phase: 'enter' | 'exit' };
+  /** Phase 11 — immersive set-piece ambience (tunnel echo). */
+  | { type: 'setpiece'; kind: 'tunnel'; phase: 'enter' | 'exit' };
 
 export interface AudioFrameState {
   status: GameScreen;
@@ -157,11 +157,11 @@ interface Rider {
   fallingInto?: Obstacle;
 }
 
-/** Phase 11 — immersive scenery set-pieces (long tunnels, waterfall
- * crossings). Purely cosmetic: no collision, no physics, no gameplay effect;
- * they are placed deterministically and skip every reserved safe zone. */
+/** Phase 11 — immersive scenery set-pieces (long tunnels). Purely cosmetic:
+ * no collision, no physics, no gameplay effect; they are placed
+ * deterministically and skip every reserved safe zone. */
 interface SetPiece {
-  kind: 'tunnel' | 'waterfall';
+  kind: 'tunnel';
   x: number;
   width: number;
   /** Seeded 0..1 draw driving per-instance variation. */
@@ -285,7 +285,7 @@ function isRunCheckpoint(value: unknown): value is RunState {
     || !run.recentPatterns.every((id) => typeof id === 'string'
       && (id === 'recovery' || OBSTACLE_PATTERNS.some((pattern) => pattern.id === id))))) return false;
   if (run.setPieces !== undefined && (!Array.isArray(run.setPieces) || run.setPieces.length > 64
-    || !run.setPieces.every((piece) => piece && (piece.kind === 'tunnel' || piece.kind === 'waterfall')
+    || !run.setPieces.every((piece) => piece && piece.kind === 'tunnel'
       && finite(piece.x) && piece.x >= 0 && finite(piece.width) && piece.width >= 200 && piece.width <= 4000
       && finite(piece.variant) && piece.variant >= 0 && piece.variant <= 1))) return false;
   if (run.nextSetPieceX !== undefined && !nonnegative(run.nextSetPieceX)) return false;
@@ -1536,21 +1536,13 @@ export class SnowGameEngine {
 
   /**
    * Phase 11 — deterministic scenery set-pieces: long tunnels to ride
-   * through and waterfall veils to ride behind. Purely cosmetic (no
-   * collision, no physics, no scoring); they skip every reserved safe zone
-   * (level start, houses) and never appear during the safe approach. Each
-   * environment has its own pool so the pieces carry the theme's identity.
+   * through. Purely cosmetic (no collision, no physics, no scoring); they
+   * skip every reserved safe zone (level start, houses) and never appear
+   * during the safe approach. (Waterfall crossings were removed after
+   * playtest feedback — every environment uses the tunnel.)
    */
   private scheduleSetPieces(run: RunState, ahead: number): void {
     run.setPieces ??= [];
-    const pools: Record<string, readonly SetPiece['kind'][]> = {
-      countryside: ['waterfall'],
-      'snowy-mountains': ['tunnel'],
-      'misty-mountains': ['tunnel', 'waterfall'],
-      'moonlit-forest': ['tunnel'],
-      jungle: ['tunnel', 'waterfall'],
-    };
-    const kinds = pools[this.environment.theme] ?? ['tunnel'];
     const reserved = [
       { start: run.levelStartX - 120, end: run.levelStartX + 1600 },
       ...run.houses.map((house) => ({ start: house.x - 1600, end: house.x + 900 })),
@@ -1563,9 +1555,8 @@ export class SnowGameEngine {
         run.nextSetPieceX = blocked.end + 400 + random() * 600;
         continue;
       }
-      const kind = kinds[Math.floor(random() * kinds.length)] ?? 'tunnel';
-      const width = kind === 'tunnel' ? 950 + random() * 550 : 430 + random() * 260;
-      run.setPieces.push({ kind, x, width, variant: random() });
+      const width = 950 + random() * 550;
+      run.setPieces.push({ kind: 'tunnel', x, width, variant: random() });
       run.nextSetPieceX = x + width + 9000 + random() * 6000;
     }
     if (run.setPieces.length > 8) {
@@ -1770,8 +1761,8 @@ export class SnowGameEngine {
     if (run.over) return;
 
     run.distance = Math.max(run.distance, rider.x);
-    // Phase 11 — set-piece ambience: crossing a tunnel or waterfall boundary
-    // fires exactly one enter/exit cue pair.
+    // Phase 11 — set-piece ambience: crossing a tunnel boundary fires
+    // exactly one enter/exit cue pair.
     const insidePiece = this.setPieceAt(run, rider.x);
     const insideKind = insidePiece?.kind ?? null;
     if (insideKind !== this.activeSetPieceKind) {
@@ -2479,9 +2470,6 @@ export class SnowGameEngine {
     context.save();
     context.translate(shakeX, cameraY);
     this.environment.drawBackground(context, view, palette);
-    // Phase 11 — ambient hot-air balloons drift between the far layers and
-    // the terrain (purely cosmetic, deterministic per camera position).
-    this.environment.drawBalloons(context, view, palette);
     if (!isMenu) {
       this.drawStartWindmill(context, cameraX, run.elapsed);
       for (const house of run.houses) this.drawFinishHouse(context, house, cameraX, run);
@@ -2491,7 +2479,7 @@ export class SnowGameEngine {
     this.environment.drawGroundDetail(context, view, palette);
     this.environment.drawDecorations(context, view, this.decorationReserved, palette);
     if (run && !isMenu) this.drawTrail(context, run, cameraX, palette);
-    // Phase 11 — set-piece backdrops (tunnel interiors, waterfall cliffs)
+    // Phase 11 — set-piece backdrops (tunnel interiors)
     // sit behind the gameplay objects and the rider.
     if (run && !isMenu) this.drawSetPiecesBack(context, run, cameraX, palette);
     if (run && !isMenu) this.drawObjects(context, run, cameraX, palette);
@@ -2502,8 +2490,7 @@ export class SnowGameEngine {
     this.drawRider(context, rider.x - cameraX, rider.y, rider.rotation, rider.grounded, isMenu, rider.x, airTime);
     context.restore();
     // Phase 11 — set-piece foregrounds: tunnel arch ribs pass in front of
-    // the rider and the waterfall veil drapes over them, so the crossing
-    // reads as riding through / behind the piece.
+    // the rider so the crossing reads as riding through the piece.
     if (run && !isMenu) this.drawSetPiecesFront(context, run, cameraX, palette);
     if (run && !isMenu) this.drawPopups(context, run, cameraX);
     if (run && !isMenu && this.obstacleDebug) this.drawObstacleDebug(context, run, cameraX);
@@ -3231,7 +3218,6 @@ export class SnowGameEngine {
   /**
    * Phase 11 — set-piece backdrops, drawn behind objects and rider.
    * Tunnels: a dark interior with timber supports and a lit far exit.
-   * Waterfalls: a cliff slab with the fall's upper cascade.
    */
   private drawSetPiecesBack(context: CanvasRenderingContext2D, run: RunState, cameraX: number, palette: Palette): void {
     for (const piece of run.setPieces ?? []) {
@@ -3262,34 +3248,13 @@ export class SnowGameEngine {
         exitGlow.addColorStop(1, alphaColor(palette.glow, 0.34 + (1 - palette.night) * 0.22));
         context.fillStyle = exitGlow;
         context.fillRect(x + piece.width - 190, groundY - height, 190, height);
-      } else {
-        // Waterfall: the cliff slab the water pours from.
-        const cliffTop = Math.max(0, groundY - 560 - piece.variant * 160);
-        const cliff = context.createLinearGradient(x, 0, x + 150, 0);
-        cliff.addColorStop(0, colorMix(palette.far, '#2c3038', 0.55));
-        cliff.addColorStop(1, colorMix(palette.far, '#454a55', 0.35));
-        context.fillStyle = cliff;
-        context.beginPath();
-        context.moveTo(x - 26, cliffTop);
-        context.lineTo(x + 132, cliffTop + 14);
-        context.lineTo(x + 148, groundY);
-        context.lineTo(x - 26, groundY);
-        context.closePath();
-        context.fill();
-        // Upper cascade clinging to the cliff face.
-        const cascade = context.createLinearGradient(0, cliffTop, 0, groundY);
-        cascade.addColorStop(0, alphaColor('#e8f4ff', 0.75));
-        cascade.addColorStop(1, alphaColor('#bcdcf0', 0.45));
-        context.fillStyle = cascade;
-        context.fillRect(x + 16, cliffTop, 88, groundY - cliffTop);
       }
     }
   }
 
   /**
    * Phase 11 — set-piece foregrounds, drawn over the rider: tunnel arch ribs
-   * and the dimming veil while inside, and the translucent waterfall curtain
-   * the rider passes behind.
+   * and the dimming veil while inside.
    */
   private drawSetPiecesFront(context: CanvasRenderingContext2D, run: RunState, cameraX: number, palette: Palette): void {
     if (this.lighterGraphics) return;
@@ -3319,36 +3284,6 @@ export class SnowGameEngine {
           context.arc(ribX, groundY + 26, height * 0.66, Math.PI * 1.08, Math.PI * 1.92);
           context.stroke();
         }
-      } else {
-        // The waterfall curtain in front of the rider: translucent, with
-        // animated streaks and a misty base.
-        const curtain = context.createLinearGradient(0, 0, 0, groundY);
-        curtain.addColorStop(0, alphaColor('#dff2ff', 0.5));
-        curtain.addColorStop(0.75, alphaColor('#bcdcf0', 0.38));
-        curtain.addColorStop(1, alphaColor('#eaf6ff', 0.16));
-        context.fillStyle = curtain;
-        context.fillRect(x - 12, 0, 150, groundY);
-        context.strokeStyle = alphaColor('#ffffff', 0.3);
-        context.lineWidth = 2;
-        for (let streak = 0; streak < 5; streak += 1) {
-          const phase = this.clock * (1.6 + streak * 0.35) + piece.variant * 9 + streak * 2.1;
-          const offset = ((phase % 1.4) / 1.4) * (groundY + 120);
-          const streakX = x + 10 + streak * 26 + Math.sin(phase) * 4;
-          context.globalAlpha = 0.5;
-          context.beginPath();
-          context.moveTo(streakX, Math.max(0, offset - 130));
-          context.lineTo(streakX, Math.min(groundY, offset));
-          context.stroke();
-        }
-        context.globalAlpha = 1;
-        // Mist pool at the base.
-        const mist = context.createRadialGradient(x + 62, groundY, 8, x + 62, groundY, 130);
-        mist.addColorStop(0, alphaColor('#ffffff', 0.4));
-        mist.addColorStop(1, alphaColor('#ffffff', 0));
-        context.fillStyle = mist;
-        context.beginPath();
-        context.ellipse(x + 62, groundY, 130, 34, 0, 0, TAU);
-        context.fill();
       }
     }
     // While inside a tunnel the world dims slightly and the exit brightens —
