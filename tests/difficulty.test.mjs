@@ -410,10 +410,10 @@ test('The engine paces real runs and keeps the final approach safe', () => {
 
 test('Physics, speed limits and checkpoints stay intact under pacing', () => {
   assert.deepEqual(BICYCLE_PHYSICS, {
-    minSpeed: 205, maxSpeed: 475, gravity: 920, jumpVelocity: 585, jumpSpeedFactor: 0.18,
+    minSpeed: 205, maxSpeed: 475, gravity: 920, jumpVelocity: 470, jumpSpeedFactor: 0.18,
     maxJumpBoost: 85, airborneAcceleration: 2.5, collisionPadding: 10, collisionBottom: 7,
     groundOffset: 5, collisionInset: 3, landingAngleLimit: 1.22, landingSpinLimit: 4.2,
-    flipHoldSeconds: 0.14, flipSeconds: 1.1, flipEaseFraction: 0.12,
+    flipHoldSeconds: 0.12, flipSeconds: 0.82, flipEaseFraction: 0.12,
   });
 
   const game = makeEngine(seedSave(4242, 21));

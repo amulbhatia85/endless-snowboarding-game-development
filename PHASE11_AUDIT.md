@@ -405,3 +405,74 @@ bundle contains no balloon or waterfall code, zero console errors across
 all five themes, tunnels still render (173–211 dark interior columns
 measured in production rides on countryside/snowy/moonlit), and theme
 palettes are unchanged. The production build shrank by ~3.7 kB.
+
+---
+
+# Jump-Size Reduction (playtest feedback: "the jump is too big")
+
+Playtest image-10 flagged the jump as oversized for the obstacle scale.
+The impulse was cut directly (not by scaling gravity): gravity stays 920
+px/s² so natural crest launches keep their feel, while the jump impulse,
+airtime, reach and every hazard corridor shrink together.
+
+## Physics (`src/game/riderPhysics.ts`)
+
+| | before | after |
+|---|---|---|
+| jumpVelocity | 585 | 470 |
+| jumpSpeedFactor | 0.21 | 0.18 |
+| maxJumpBoost | 120 | 85 |
+| flipHoldSeconds | 0.14 | 0.12 |
+| flipSeconds | 1.1 | 0.82 |
+
+Resulting arcs (impulse = 470 + min(85, speed·0.18)):
+
+| speed | impulse | apex | airtime | reach |
+|---|---|---|---|---|
+| 205 (min) | 507 | 140 px | 1.10 s | 226 px |
+| 285 (cruise) | 521 | 148 px | 1.13 s | 323 px |
+| 475 (max) | 555 | 167 px | 1.21 s | 574 px |
+
+Apex drops 26–32 %; airtime −17–21 %. The held backflip totals 0.94 s
+(hold 0.12 + spin 0.82), which still completes inside the shortest airtime
+the terrain allows at minimum speed (~1.01 s on the steepest validated
+downhill).
+
+## Corridor retunes (validator ↔ pose changes moved together)
+
+- Static takeoffs (`validateObstacle`): tree 100→132, fence 85, root 58,
+  log 65→80, rock 65→70 px before the obstacle — deep enough for the
+  slower-rising max-speed arc to reach clearance at the near corridor
+  edge, with the landing pad inside the 226 px minimum-speed reach.
+- Tree collision height 74→64 (the drawn pine is ~77 px; the thin snowy
+  top tier is forgiving) so both corridor edges fit the shortened arc on
+  sloped ground.
+- Swinging log: swing ±16→±14, hang ground−28±8→−24±6, collision
+  {radius 30, height 34}; corridor radius 46→44, clearance height 90→50,
+  takeoff x−160→x−128.
+- Snowball: sweep 28, bias clamp ±8, corridor radius 53, takeoff x−120.
+- Cliff width cap 120, small-gap cap 118, early-landing slack 45 px.
+- `feasibility.ts` early-landing slack 45 px documented against the
+  flatter arc's wider landing spread.
+
+## Verification
+
+- Full suite 245/245 green, tsc clean.
+- Independent physics audit: 3 081 placements across level bands 1–9999,
+  zero violations (the earlier failures — tree mid-arc clips on uphill
+  bumps, swinging-log placement collapse, L21 hazard-density collapse,
+  coin-over-gap overlap — were all downstream of the untuned corridors
+  and are gone).
+- Rendered A/B in real Chromium, production builds of both revisions,
+  identical measurement pipeline (per-frame canvas scan of the rider,
+  ~265 px/s ride speed):
+  - tap jump: apex 194 px → 116 px (−40 %), airtime 1.32 s → 1.05 s
+  - held backflip: apex 182 px → 116 px (−36 %), airtime 1.31 s → 1.06 s,
+    flip completes and lands clean.
+  - Screenshots: `qa/phase11-jump/` (old-* vs new-*).
+- No console errors in any ride.
+
+Fairness contract unchanged: every hazard remains clearable by a
+minimum-speed jump timed within the ±8 px margin, at every swing phase,
+on flat and sloped ground, tap and held — enforced by the same
+validators, now tuned to the smaller arc.

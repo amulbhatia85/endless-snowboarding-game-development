@@ -641,7 +641,7 @@ test('standard gameplay events flow to the audio callback', () => {
   game.run.objects = game.run.objects.filter((o) => o.kind !== 'coin');
   game.run.objects.push({ kind: 'coin', x: game.run.rider.x + 120, offset: 25 });
   game.jumpQueued = true;
-  ride(game, fast, 30);
+  ride(game, fast, 90); // long enough for the jump's full flight and landing
   assert.ok(sounds.some((e) => e.type === 'coin'), 'coin collection cued');
   assert.ok(sounds.some((e) => e.type === 'jump'), 'jump cued');
   assert.ok(sounds.some((e) => e.type === 'land'), 'landing cued');

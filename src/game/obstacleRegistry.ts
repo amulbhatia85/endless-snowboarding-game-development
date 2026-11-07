@@ -30,7 +30,9 @@ const ready = { asset: true, rendering: true, collision: true, rules: true };
 export const OBSTACLE_REGISTRY: Readonly<Record<ObstacleId, ObstacleDefinition>> = {
   rock: { id: 'rock', group: 'static', capabilities: ready, collision: { radius: 19, height: 23 }, requiresWarning: false },
   log: { id: 'log', group: 'static', capabilities: ready, collision: { radius: 29, height: 26 }, requiresWarning: false },
-  tree: { id: 'tree', group: 'static', capabilities: ready, collision: { radius: 17, height: 74 }, requiresWarning: false },
+  // Height 64 (the drawn pine is ~77px): the hitbox covers the trunk and
+  // the lower tiers; the thin snowy top tier is forgiving. Radius stays 17.
+  tree: { id: 'tree', group: 'static', capabilities: ready, collision: { radius: 17, height: 64 }, requiresWarning: false },
   root: { id: 'root', group: 'static', capabilities: ready, collision: { radius: 22, height: 11 }, requiresWarning: false },
   fence: { id: 'fence', group: 'static', capabilities: ready, collision: { radius: 13, height: 44 }, requiresWarning: true },
   gap: { id: 'gap', group: 'terrain', capabilities: ready, requiresWarning: false },
@@ -41,7 +43,7 @@ export const OBSTACLE_REGISTRY: Readonly<Record<ObstacleId, ObstacleDefinition>>
   ice: { id: 'ice', group: 'environmental', capabilities: ready, requiresWarning: false },
   icicle: { id: 'icicle', group: 'environmental', capabilities: ready, collision: { radius: 13, height: 26 }, requiresWarning: true },
   snowball: { id: 'snowball', group: 'environmental', capabilities: ready, collision: { radius: 17, height: 30 }, requiresWarning: true },
-  'swinging-log': { id: 'swinging-log', group: 'moving', capabilities: ready, collision: { radius: 34, height: 38 }, requiresWarning: true },
+  'swinging-log': { id: 'swinging-log', group: 'moving', capabilities: ready, collision: { radius: 30, height: 34 }, requiresWarning: true },
   'moving-platform': { id: 'moving-platform', group: 'moving', capabilities: ready, requiresWarning: true },
   branch: { id: 'branch', group: 'moving', capabilities: ready, collision: { radius: 26, height: 16 }, requiresWarning: true },
 };
@@ -56,8 +58,11 @@ export function obstacleReady(id: string): boolean {
 
 
 export function swingingLogPose(x: number, groundY: number, elapsed: number, phase = 0): { x: number; y: number; angle: number } {
+  // Smaller jumps (Phase 11 playtest tuning): the log swings less far and
+  // hangs lower, so the shorter arc clears it with margin at both speed
+  // extremes and on sloped ground.
   const swing = Math.sin(elapsed * 1.5 + phase);
-  return { x: x + swing * 24, y: groundY - 42 + Math.cos(elapsed * 1.5 + phase) * 10, angle: swing * 0.25 };
+  return { x: x + swing * 14, y: groundY - 24 + Math.cos(elapsed * 1.5 + phase) * 6, angle: swing * 0.25 };
 }
 
 /** Deterministic icicle pose over a 4.2s cycle: hang -> shake warning -> fall -> shattered. */
@@ -105,8 +110,10 @@ export function branchPose(groundY: number, elapsed: number, phase = 0): BranchP
  * terrain descends toward +x). Rotation follows the sweep so it reads as rolling.
  */
 export function snowballPose(x: number, slope: number, elapsed: number, phase = 0): { x: number; rotation: number } {
-  const bias = slope * 16 > 16 ? 16 : slope * 16 < -16 ? -16 : slope * 16;
-  const sweep = Math.sin(elapsed * 0.85 + phase) * 48;
+  // Flatter jump arcs: a tighter patrol (sweep 28 + bias 8 + radius 17 =
+  // 53 px corridor) stays clearable in one jump at minimum speed.
+  const bias = slope * 8 > 8 ? 8 : slope * 8 < -8 ? -8 : slope * 8;
+  const sweep = Math.sin(elapsed * 0.85 + phase) * 28;
   return { x: x + sweep + bias, rotation: -(elapsed * 0.85 + phase) - Math.PI / 2 };
 }
 

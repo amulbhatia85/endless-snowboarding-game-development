@@ -428,7 +428,7 @@ export class ObstaclePlanner {
         bridged = true;
       } else if (id === 'cliff' || id === 'broken-bridge') {
         // Sheer-face and plank-stub variants of the validated gap envelope.
-        width = id === 'cliff' ? 106 + random() * 44 : 88 + random() * 34;
+        width = id === 'cliff' ? 106 + random() * 14 : 88 + random() * 34;
         validation = validateGap(surface, x, width, options);
         kind = 'gap';
       } else if (id === 'ice') {
@@ -442,7 +442,7 @@ export class ObstaclePlanner {
         validation = validateSnowball(surface, x, options);
         kind = id;
       } else if (id === 'gap') {
-        width = 82 + random() * 48;
+        width = 82 + random() * 36;
         validation = validateGap(surface, x, width, options);
         kind = 'gap';
       } else if (id === 'swinging-log') {

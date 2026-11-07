@@ -359,10 +359,10 @@ test('Decorations avoid gameplay objects and never participate in collisions', (
 
 test('Weather and environment updates never change rider physics', () => {
   assert.deepEqual(BICYCLE_PHYSICS, {
-    minSpeed: 205, maxSpeed: 475, gravity: 920, jumpVelocity: 585, jumpSpeedFactor: 0.18,
+    minSpeed: 205, maxSpeed: 475, gravity: 920, jumpVelocity: 470, jumpSpeedFactor: 0.18,
     maxJumpBoost: 85, airborneAcceleration: 2.5, collisionPadding: 10, collisionBottom: 7,
     groundOffset: 5, collisionInset: 3, landingAngleLimit: 1.22, landingSpinLimit: 4.2,
-    flipHoldSeconds: 0.14, flipSeconds: 1.1, flipEaseFraction: 0.12,
+    flipHoldSeconds: 0.12, flipSeconds: 0.82, flipEaseFraction: 0.12,
   });
 
   const seedSave = () => {

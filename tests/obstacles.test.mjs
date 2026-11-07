@@ -204,8 +204,9 @@ test('Swinging logs warn and remain clearable at different swing phases', () => 
     const x = 1500;
     run.objects = [{ kind: 'swinging-log', x, phase }];
     run.nextCoinX = run.nextHazardX = 1e12;
-    Object.assign(run.rider, { x: x - 160, y: 355, grounded: true, rotation: 0, speed });
-    run.distance = x - 160;
+    // Take off from the position validateSwingingLog itself guarantees.
+    Object.assign(run.rider, { x: x - 128, y: 355, grounded: true, rotation: 0, speed });
+    run.distance = x - 128;
     game.levels.progress.runScore = Math.floor(run.distance / 10);
     game.press();
     if (!held) game.release();

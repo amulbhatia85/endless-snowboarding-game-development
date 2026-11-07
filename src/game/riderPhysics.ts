@@ -2,8 +2,18 @@
 export const BICYCLE_PHYSICS = {
   minSpeed: 205,
   maxSpeed: 475,
+  // Playtest tuning (jump size): tap-jump impulse cut 585 -> 470 with
+  // gravity unchanged, so natural crest launches keep their exact feel.
+  // Apex at max speed 244 px -> 167 px, at cruise 220 px -> 148 px; airtime
+  // 1.46 s -> 1.21 s; reach @475 692 px -> 574 px. The backflip tightens
+  // (hold 0.12 s + spin 0.82 s = 0.94 s) so it still completes with margin
+  // inside the shortest airtime the terrain allows at minimum speed
+  // (~1.01 s on the steepest validated downhill). Hazard
+  // corridors (swinging log, snowball patrol, wide gap variants) were
+  // retuned for the shorter reach; every consumer derives from these
+  // constants, so validation and the live physics stay in lockstep.
   gravity: 920,
-  jumpVelocity: 585,
+  jumpVelocity: 470,
   jumpSpeedFactor: 0.18,
   maxJumpBoost: 85,
   airborneAcceleration: 2.5,
@@ -13,8 +23,8 @@ export const BICYCLE_PHYSICS = {
   collisionInset: 3,
   landingAngleLimit: 1.22,
   landingSpinLimit: 4.2,
-  flipHoldSeconds: 0.14,
-  flipSeconds: 1.1,
+  flipHoldSeconds: 0.12,
+  flipSeconds: 0.82,
   flipEaseFraction: 0.12,
 } as const;
 

@@ -390,7 +390,12 @@ export function validateObstacle(
   heightAt: (x: number) => number, x: number, kind: 'rock' | 'tree' | 'log' | 'root' | 'fence', options?: TraversalOptions,
 ): LandingValidation {
   const { radius, height } = OBSTACLE_REGISTRY[kind].collision!;
-  const takeoff = x - (kind === 'tree' ? 100 : kind === 'fence' ? 85 : kind === 'root' ? 58 : 65);
+  // Takeoff distances leave the near corridor edge deep enough into the
+  // flight for the slower-rising shortened arc to have reached the required
+  // clearance at maximum speed with a late (+margin) tap, on top of the
+  // takeoff jitter — while the landing pad stays inside the minimum-speed
+  // reach (226 px).
+  const takeoff = x - (kind === 'tree' ? 132 : kind === 'fence' ? 85 : kind === 'root' ? 58 : kind === 'log' ? 80 : 70);
   return validateLanding(heightAt, takeoff, heightAt(takeoff) - 5, x + radius,
     { x, radius, height }, options);
 }
@@ -448,11 +453,11 @@ export function validateFallingHazard(
 export function validateSnowball(
   heightAt: (x: number) => number, x: number, options?: TraversalOptions,
 ): LandingValidation {
-  // Patrol amplitude 48 + downhill bias 16 + ball radius 17 = 81px corridor —
-  // the same proven profile as the swinging log, clearable in one jump at
-  // minimum speed wherever the patrol has carried the ball.
-  return validateLanding(heightAt, x - 160, heightAt(x - 160) - 5, x + 81,
-    { x, radius: 81, height: 30 }, options);
+  // Patrol sweep 28 + downhill bias 8 + ball radius 17 = 53px corridor —
+  // clearable in one jump at minimum speed wherever the patrol has carried
+  // the ball (retuned for the shorter Phase 11 jump reach: takeoff x-120).
+  return validateLanding(heightAt, x - 120, heightAt(x - 120) - 5, x + 53,
+    { x, radius: 53, height: 30 }, options);
 }
 
 export function validateRampGap(
@@ -471,6 +476,13 @@ export function validateSwingingLog(
   heightAt: (x: number) => number, x: number, options?: TraversalOptions,
 ): LandingValidation {
   // Covers every swing phase, rotation, and local ground-height difference.
-  return validateLanding(heightAt, x - 160, heightAt(x - 160) - 5, x + 58,
-    { x, radius: 58, height: 90 }, options);
+  // Swing 14 + log half-length 30 = 44px corridor; clearance height 50
+  // (validator requires rider >= 54px above ground) covers the log hung at
+  // ground-24±6 with a 34px collision box (top at ground-47) plus the
+  // rider's bottom and inset. Takeoff x-128 keeps the whole corridor inside
+  // the >=54px-clearance span of the shortened jump at BOTH speed extremes
+  // and on sloped ground, with the 24px recovery pad inside the
+  // minimum-speed reach (226px).
+  return validateLanding(heightAt, x - 128, heightAt(x - 128) - 5, x + 44,
+    { x, radius: 44, height: 50 }, options);
 }

@@ -185,7 +185,7 @@ export function validateObstaclePlacement(
       });
       if (rideOk) safeRide += 1;
       // Jump strategy: take off 140px early. The arc clears the hazard
-      // vertically (every hazard is far shorter than the ~186px apex) and must
+      // vertically (every hazard is far shorter than the ~143px apex) and must
       // land inside the validated clear corridor before the next plan.
       const jumpOk = SPEED_GRID.some((speed) => {
         const takeoff = obstacle.x - 140;
@@ -240,7 +240,10 @@ export function validateObstaclePlacement(
       if (landingSlope > 0.42) {
         fail(`${start.label} takeoff @${speed}: landing slope ${landingSlope.toFixed(2)}`);
       }
-      if (flight.landingX < plan.landing.start - 25 || flight.landingX > plan.landing.end + 25) {
+      // The flatter Phase 11 arc meets sloped ground at a shallower angle,
+      // so a takeoff sampled 10px beyond the band shifts the landing up to
+      // ~2.5x that far; the jitter slack is 45px (0.22s at min speed).
+      if (flight.landingX < plan.landing.start - 45 || flight.landingX > plan.landing.end + 25) {
         fail(`${start.label} takeoff @${speed}: lands at ${Math.round(flight.landingX)} outside the validated band [${Math.round(plan.landing.start)}, ${Math.round(plan.landing.end)}]`);
         continue;
       }
