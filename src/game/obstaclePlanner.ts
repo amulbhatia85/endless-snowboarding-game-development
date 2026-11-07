@@ -74,8 +74,11 @@ export const OBSTACLE_PATTERNS: readonly Pattern[] = [
   { id: 'snowball-roll', minLevel: 5, weight: 8, requires: ['snowball'], sequence: ['snowball'], rating: 0.74 },
   { id: 'cliff-jump', minLevel: 7, weight: 7, requires: ['cliff'], sequence: ['cliff'], rating: 0.85 },
   { id: 'broken-bridge', minLevel: 6, weight: 7, requires: ['broken-bridge'], sequence: ['broken-bridge'], rating: 0.8 },
-  { id: 'moving-platform', minLevel: 6, weight: 6, requires: ['moving-platform'], sequence: ['moving-platform'], rating: 0.66 },
-  { id: 'falling-branch', minLevel: 6, weight: 8, requires: ['branch'], sequence: ['branch'], rating: 0.78 },
+  // Phase 9E balance: moving platforms and falling branches were staggered to
+  // level 7 so level 6 no longer introduces five patterns at once — the
+  // learning curve gains a new family at a time.
+  { id: 'moving-platform', minLevel: 7, weight: 6, requires: ['moving-platform'], sequence: ['moving-platform'], rating: 0.66 },
+  { id: 'falling-branch', minLevel: 7, weight: 8, requires: ['branch'], sequence: ['branch'], rating: 0.78 },
   // Moving hazards require a complete renderer, collider, warning and validated envelope.
   { id: 'warned-swinging-log', minLevel: 8, weight: 10, requires: ['swinging-log'], sequence: ['swinging-log'], rating: 0.85 },
 ];
@@ -203,6 +206,18 @@ export class ObstaclePlanner {
         weight *= Math.max(0.12, Math.exp(-(delta * delta) / (2 * 0.22 * 0.22)));
         const repeats = recent.reduce((count, id) => count + (id === pattern.id ? 1 : 0), 0);
         weight *= 0.5 ** repeats;
+        // Phase 9E — a pattern already scheduled twice back-to-back is benched
+        // entirely while any alternative exists (high-level theme pools could
+        // otherwise chain the same demanding pattern four times). Weights,
+        // availability and validation are otherwise unchanged.
+        if (
+          recent.length >= 2
+          && recent[recent.length - 1] === pattern.id
+          && recent[recent.length - 2] === pattern.id
+          && candidates.some((other) => other.id !== pattern.id)
+        ) {
+          weight = 0;
+        }
       }
       if (focus && focus.length) {
         weight *= pattern.requires.some(id => focus.includes(id)) ? 1.9 : 0.72;

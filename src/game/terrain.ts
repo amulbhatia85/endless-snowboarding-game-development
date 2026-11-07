@@ -43,8 +43,16 @@ export class TerrainGenerator {
   }
 
   private recovery(index: number): boolean {
+    if (index <= 0) return true;
     const base = PROFILES[this.configuration.environment].recovery * this.bias.recoveryScale;
-    return index <= 0 || this.random(index, 0x43f12) < clamp(base, 0.08, 0.42);
+    if (this.random(index, 0x43f12) >= clamp(base, 0.08, 0.42)) return false;
+    // Phase 9E — cap flat valleys at five consecutive chunks (~3.2 km) so the
+    // silhouette keeps breathing. Recovery probability itself is untouched;
+    // only statistically excessive streaks are trimmed.
+    for (let back = 1; back <= 5; back += 1) {
+      if (!this.recovery(index - back)) return true;
+    }
+    return false;
   }
 
   private anchor(index: number): number {

@@ -8,6 +8,7 @@ import type { WeatherEffectConfig } from './weather';
 import { createLevelRandom, LevelManager, previewLevelForObstacle } from './levelManager';
 import { DifficultyManager, type DifficultyDirective } from './difficulty';
 import { EventManager, EVENT_DEFINITIONS, eventDefinition, scheduleForLevel, type EventId } from './events';
+import { validateObstaclePlacement, type FeasibilityViolation } from './feasibility';
 
 import { BIKES, RIDERS, TRAILS, MISSIONS, MISSION_BONUS, isUnlocked, requirementsMet, findCosmetic, type BikeEntry, type RiderEntry, type TrailEntry, type UnlockContext } from './progression';
 import { Wallet, REWARD_CONFIG, type LevelRewardBreakdown } from './wallet';
@@ -380,6 +381,14 @@ export class SnowGameEngine {
   // session; it rebinds (idempotently) whenever the level or its start x
   // changes, so restored checkpoints and revivals replay the same schedule.
   private readonly events = new EventManager();
+  // Phase 9E — developer diagnostics (collected only while obstacle debug /
+  // ?dev=1 is active, so normal gameplay pays nothing). Frame timing plus a
+  // live re-validation of every placed obstacle against the independent
+  // physics-feasibility auditor.
+  private devFrameMsAverage = 0;
+  private devFrameMsMax = 0;
+  private devFrameSamples = 0;
+  private fairnessViolations: FeasibilityViolation[] = [];
   /** Fixed terrain-complexity sampling window: generation must not depend on
    *  the viewport, or wide and narrow screens would diverge (see tests). */
   private static readonly COMPLEXITY_WINDOW = 2000;
@@ -401,7 +410,13 @@ export class SnowGameEngine {
 
   setObstacleDebug(enabled: boolean): void {
     this.obstacleDebug = enabled;
-    if (!enabled) this.obstacleRejections = [];
+    if (!enabled) {
+      this.obstacleRejections = [];
+      this.fairnessViolations = [];
+      this.devFrameSamples = 0;
+      this.devFrameMsAverage = 0;
+      this.devFrameMsMax = 0;
+    }
   }
 
   /**
@@ -809,6 +824,23 @@ export class SnowGameEngine {
       .filter((definition) => level.number >= definition.minLevel)
       .map((definition) => `${definition.id}(r${definition.rarity})`);
     lines.push(`EVENT POOL ${eligibleEvents.join(' · ')}`);
+    // Phase 9E — repetition, fairness and performance diagnostics. The
+    // fairness/perf rows only carry data while developer diagnostics are
+    // enabled (?dev=1); they stay empty ("—") in normal gameplay.
+    const recentList = this.run?.recentPatterns ?? [];
+    let longestRun = 0;
+    let runLength = 0;
+    let previousId = '';
+    for (const id of recentList) {
+      runLength = id === previousId ? runLength + 1 : 1;
+      previousId = id;
+      longestRun = Math.max(longestRun, runLength);
+    }
+    lines.push(`REPETITION ${recentList.length ? recentList.slice(-12).join(' → ') : '—'} · longest repeat run ${longestRun}`);
+    lines.push(`FAIRNESS ${this.fairnessViolations.length} runtime violations${this.fairnessViolations.length ? ` · latest: ${this.fairnessViolations.slice(-3).map((violation) => `${violation.kind}@${Math.round(violation.x)} ${violation.reason}`).join(' | ')}` : ''}`);
+    const objectCount = this.run ? this.run.objects.length : 0;
+    const particleCount = this.run ? this.run.particles.length : 0;
+    lines.push(`PERF ${this.devFrameSamples ? `${this.devFrameMsAverage.toFixed(2)}ms avg · ${this.devFrameMsMax.toFixed(2)}ms max over ${this.devFrameSamples} frames` : '— (diagnostics off)'} · ${objectCount} objects · ${particleCount} particles · terrain ${this.terrain?.cachedChunks ?? 0} chunks · decor ${this.environment.decorationChunkCount} chunks`);
     const chunk = this.run ? this.terrain?.describe(this.run.rider.x) : undefined;
     lines.push(`TERRAIN NOW ${chunk ? `L${chunk.level} chunk ${chunk.index} · ${chunk.pattern}` : '—'}`);
     lines.push(`TARGET ${level.targetScore} pts · transitions ${level.transitions.start.seconds}s / ${level.transitions.end.entrySeconds}s+${level.transitions.end.completionSeconds}s`);
@@ -955,6 +987,7 @@ export class SnowGameEngine {
   }
 
   private readonly frame = (timestamp: number) => {
+    const devStarted = this.obstacleDebug ? performance.now() : 0;
     const delta = this.lastFrame === 0 ? 0 : clamp((timestamp - this.lastFrame) / 1000, 0, 0.1);
     this.lastFrame = timestamp;
 
@@ -1034,6 +1067,13 @@ export class SnowGameEngine {
       });
     }
     this.frameHandle = window.requestAnimationFrame(this.frame);
+    // Phase 9E — dev-only frame telemetry (exponential moving average + peak).
+    if (this.obstacleDebug && devStarted) {
+      const elapsed = performance.now() - devStarted;
+      this.devFrameSamples += 1;
+      this.devFrameMsAverage += (elapsed - this.devFrameMsAverage) / Math.min(this.devFrameSamples, 240);
+      this.devFrameMsMax = Math.max(this.devFrameMsMax, elapsed);
+    }
   };
 
   private lastNight = 0;
@@ -1256,6 +1296,14 @@ export class SnowGameEngine {
         };
       }
       if (this.obstacleDebug) this.obstacleRejections = [...this.obstacleRejections, ...plan.rejected].slice(-24);
+      // Phase 9E — dev-only: re-validate every placed obstacle with the
+      // independent physics auditor (live fairness detection).
+      if (this.obstacleDebug) {
+        for (const obstacle of plan.obstacles) {
+          const violations = validateObstaclePlacement(obstacle, (x) => this.terrainAt(x));
+          if (violations.length) this.fairnessViolations = [...this.fairnessViolations, ...violations].slice(-24);
+        }
+      }
       run.nextHazardX = plan.nextX;
     }
 
@@ -2196,6 +2244,9 @@ export class SnowGameEngine {
         : nextWindow ? `— · next ${nextWindow.eventId} @+${Math.round(nextWindow.startX - run!.rider.x)}px`
           : '—';
     rows.push(`EVENT ${eventText}${eventReport.forced ? ` · force ${eventReport.forced}` : ''}`);
+    // Phase 9E — live fairness + performance rows (dev overlay only).
+    rows.push(`FAIR ${this.fairnessViolations.length} violations${this.fairnessViolations.length ? ` · ${this.fairnessViolations[this.fairnessViolations.length - 1].kind}` : ''}`);
+    rows.push(`PERF ${this.devFrameSamples ? `${this.devFrameMsAverage.toFixed(2)}ms · max ${this.devFrameMsMax.toFixed(1)}ms` : '—'} · ${run ? run.objects.length : 0} obj · ${run ? run.particles.length : 0} pt`);
     const chunk = this.terrain?.describe(run.rider.x);
     rows.push(`TERRAIN ${chunk ? `L${chunk.level} chunk ${chunk.index} · ${chunk.pattern} · complexity ${directive ? directive.terrainComplexity.toFixed(2) : '—'}` : '—'} · jump reach ${directive ? `${directive.riderEnvelope.minJumpDistance}–${directive.riderEnvelope.maxJumpDistance}px` : '—'}`);
     const active = level.allowedObstacles.filter((id) => obstacleReady(id));
