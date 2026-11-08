@@ -1,10 +1,22 @@
 name: Build iOS
 
 # Builds the Capacitor iOS app on a GitHub-hosted Mac and launches it on an
-# iOS Simulator — no local Mac required. Manual trigger only (private repos
-# bill macOS minutes at 10x, so this never runs on every push).
+# iOS Simulator — no local Mac required. Runs on manual dispatch, and on
+# pushes that touch the iOS project, the game code or the build config
+# (private repos bill macOS minutes at 10x, so docs/test-only pushes never
+# trigger it).
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - arena/62ca48ad-endless-snowboarding-game-deve
+    paths:
+      - .github/workflows/build-ios.yml
+      - ios/**
+      - src/**
+      - capacitor.config.json
+      - package.json
+      - package-lock.json
 
 jobs:
   simulator:
