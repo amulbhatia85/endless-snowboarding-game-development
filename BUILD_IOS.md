@@ -4,10 +4,28 @@ The iOS project lives in `ios/` (Capacitor v8, Swift Package Manager — no
 CocoaPods needed). It wraps the same web build as the Android app: the game
 itself is the `dist/` bundle, copied into `ios/App/App/public/`.
 
-> **This project was generated and synced on Linux.** Apple requires a Mac
-> with Xcode to compile, sign and run iOS apps, so the actual build has not
-> been executed or verified in this environment. Everything below is ready —
-> the remaining steps are Mac-only.
+## Build verification (cloud Mac, no local Mac required)
+
+`.github/workflows/build-ios.yml` builds the app on a **GitHub-hosted macOS
+runner** and launches it on an iOS Simulator. Verified there (run on an
+**iPhone 17 Pro simulator**):
+
+- Xcode build succeeds (unsigned simulator build, Xcode on `macos-latest`)
+- App installs, launches and **stays alive**; no app-process errors in the
+  simulator log (only Apple `amsaccountsd` daemon noise)
+- Screenshots show the game menu fully rendered (36–38 % brand-navy pixels,
+  ~96 distinct color buckets — not a blank/white screen). The screenshots
+  are uploaded as run artifacts (**Actions → Build iOS → run → Artifacts**).
+
+The workflow runs on pushes that touch `ios/`, `src/`, the build config or
+the workflow itself, and manually via `workflow_dispatch` once the workflow
+is on the default branch (`gh workflow run build-ios.yml`). **Cost note:**
+this is a private repository — GitHub bills macOS runner minutes at 10×,
+so each run costs ~7 billed minutes of the monthly quota.
+
+What is still NOT verified: gameplay input on a device (the simulator
+harness cannot synthesize taps), audio on device, and a signed, App
+Store-ready IPA — those need the Mac/Xcode steps below.
 
 ## Already configured
 
