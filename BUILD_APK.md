@@ -1,5 +1,12 @@
 # Building the Afterglow APK
 
+> **CI rebuilds this for you.** `.github/workflows/build-android.yml` builds
+> the debug APK on a GitHub-hosted Linux runner whenever the game code or the
+> Android project changes, verifies it bundles the current `dist/index.html`
+> byte-for-byte, and commits it back to the branch as `Afterglow.apk` (also
+> uploaded as a run artifact). The manual steps below remain valid for local
+> builds.
+
 Requirements: Node.js, JDK 21, Android Studio (includes the Android SDK).
 
 ```bash

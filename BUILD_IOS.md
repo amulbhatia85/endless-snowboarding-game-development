@@ -23,9 +23,24 @@ is on the default branch (`gh workflow run build-ios.yml`). **Cost note:**
 this is a private repository — GitHub bills macOS runner minutes at 10×,
 so each run costs ~7 billed minutes of the monthly quota.
 
+## Downloadable iPhone packages
+
+Each workflow run uploads (Actions → Build iOS → run → **Artifacts**):
+
+- `Afterglow-iOS-packages/Afterglow-iOS-unsigned.ipa` — a **device build
+  without a signature**. Apple will not run it as-is; install it on a real
+  iPhone by re-signing with your own Apple ID using
+  [Sideloadly](https://sideloadly.io/) or AltStore on any computer
+  (free Apple ID works, 7-day refresh), or via Xcode on a Mac.
+- `Afterglow-iOS-packages/Afterglow-iOS-simulator-app.zip` — the simulator
+  app for Xcode users.
+- `ios-simulator-verification/` — launch screenshots + logs from the
+  iPhone simulator run.
+
 What is still NOT verified: gameplay input on a device (the simulator
 harness cannot synthesize taps), audio on device, and a signed, App
-Store-ready IPA — those need the Mac/Xcode steps below.
+Store-ready IPA — those need the Mac/Xcode steps below or sideload
+re-signing.
 
 ## Already configured
 
