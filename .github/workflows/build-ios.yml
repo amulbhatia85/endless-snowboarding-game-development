@@ -59,6 +59,33 @@ jobs:
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO build
 
+      - name: Build the app for iOS devices (unsigned)
+        run: |
+          cd ios/App
+          xcodebuild -project App.xcodeproj -scheme App \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build-device \
+            CODE_SIGNING_ALLOWED=NO build
+
+      # An unsigned device IPA: installable on a real iPhone once it is
+      # re-signed with an Apple ID (Sideloadly / AltStore on any computer,
+      # or Xcode on a Mac). Simulator apps cannot run on devices, so this
+      # is the package non-Mac users actually sideload.
+      - name: Package the unsigned device IPA
+        run: |
+          cd ios/App/build-device/Build/Products/Debug-iphoneos
+          mkdir -p Payload
+          cp -R App.app Payload/
+          zip -qry9 "$GITHUB_WORKSPACE/Afterglow-iOS-unsigned.ipa" Payload
+          ls -la "$GITHUB_WORKSPACE/Afterglow-iOS-unsigned.ipa"
+
+      - name: Package the simulator app
+        run: |
+          cd ios/App/build/Build/Products/Debug-iphonesimulator
+          zip -qry9 "$GITHUB_WORKSPACE/Afterglow-iOS-simulator-app.zip" App.app
+          ls -la "$GITHUB_WORKSPACE/Afterglow-iOS-simulator-app.zip"
+
       - name: Boot a simulator, install and launch the app
         run: |
           UDID=$(xcrun simctl list devices available | grep -E 'iPhone' | head -1 | sed -E 's/.*\(([A-F0-9-]{36})\).*/\1/')
@@ -175,4 +202,14 @@ jobs:
             app-log.txt
             verification.txt
           if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload the iOS app packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: Afterglow-iOS-packages
+          path: |
+            Afterglow-iOS-unsigned.ipa
+            Afterglow-iOS-simulator-app.zip
+          if-no-files-found: error
           retention-days: 14

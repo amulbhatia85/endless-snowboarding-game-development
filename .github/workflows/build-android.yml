@@ -1,0 +1,81 @@
+name: Build Android APK
+
+# Builds the debug APK on a GitHub-hosted Linux runner and commits it back
+# to the branch as Afterglow.apk (the repo's established artifact slot).
+# Runs on manual dispatch and on pushes that touch the game code, the
+# Android project or the build config.
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - arena/62ca48ad-endless-snowboarding-game-deve
+    paths:
+      - .github/workflows/build-android.yml
+      - src/**
+      - android/**
+      - capacitor.config.json
+      - package.json
+      - package-lock.json
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    name: Build the debug APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the web game
+        run: npm run build
+
+      - name: Sync into the Android project
+        run: npx cap sync android
+
+      - name: Build the APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleDebug
+
+      - name: Verify the APK contains exactly the current web build
+        run: |
+          unzip -p android/app/build/outputs/apk/debug/app-debug.apk assets/public/index.html > /tmp/apk-index.html
+          cmp /tmp/apk-index.html dist/index.html
+          echo "APK bundles the current dist/index.html byte-for-byte"
+
+      - name: Commit the APK back to the branch
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk Afterglow.apk
+          ls -la Afterglow.apk
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Afterglow.apk
+          if git diff --cached --quiet; then
+            echo "APK unchanged"
+          else
+            git commit -m "Rebuild Afterglow.apk from the current web build [skip ci]"
+            git push
+          fi
+
+      - name: Upload the APK as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Afterglow-android-apk
+          path: Afterglow.apk
+          retention-days: 14
