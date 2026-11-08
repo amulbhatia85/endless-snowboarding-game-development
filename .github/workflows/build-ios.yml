@@ -82,6 +82,7 @@ jobs:
           xcrun simctl spawn "$UDID" log show --last 2m --predicate 'processImagePath CONTAINS "App"' > app-log.txt || true
           JSERRORS=$(grep -ciE 'fatal|terminating|uncaught|WKErrorDomain' app-log.txt || true)
           echo "ALIVE=$ALIVE DEVICE=$DEVICE JSERROR_LINES=$JSERRORS" >> verification.txt
+          grep -iE 'fatal|terminating|uncaught|WKErrorDomain' app-log.txt | head -8 | cut -c1-220 >> verification.txt || true
 
       # Pixel analysis of the screenshots, run on the runner and reported via
       # check-run annotations (so the data is visible through the GitHub API
@@ -107,9 +108,9 @@ jobs:
               else if (type === 'IEND') break;
               pos += 12 + len;
             }
-            if (bitDepth !== 8 || colorType !== 2) return { width, height, note: `unsupported ${bitDepth}/${colorType}` };
+            if (bitDepth !== 8 || (colorType !== 2 && colorType !== 6)) return { width, height, note: `unsupported ${bitDepth}/${colorType}` };
             const raw = zlib.inflateSync(Buffer.concat(idat));
-            const bpp = 3, stride = width * bpp;
+            const bpp = colorType === 6 ? 4 : 3, stride = width * bpp;
             const rows = [];
             let o = 0;
             for (let y = 0; y < height; y += 1) {
