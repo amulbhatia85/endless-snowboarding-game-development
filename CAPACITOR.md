@@ -1,9 +1,11 @@
 # Capacitor Readiness (Phase 10C)
 
+> **Update:** both native platforms have since been added — see `android/`
+> (BUILD_APK.md) and `ios/` (BUILD_IOS.md). The analysis below is the
+> historical Phase 10C readiness record.
+
 This document records what is already WebView-safe in the current web build and
-which Android/iOS configuration steps remain for a future native shell. **No
-native platform has been added** — this phase prepares and documents only; the
-web app remains the working product.
+which Android/iOS configuration steps remain for a future native shell.
 
 ## 1. Already WebView-safe in the code
 
