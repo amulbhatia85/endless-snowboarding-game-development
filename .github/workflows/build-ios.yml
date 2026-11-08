@@ -18,6 +18,9 @@ on:
       - package.json
       - package-lock.json
 
+permissions:
+  contents: write
+
 jobs:
   simulator:
     name: Build & launch on iOS Simulator
@@ -148,7 +151,18 @@ jobs:
           EOF
           cat verification.txt
           SUMMARY=$(cat verification.txt)
-          echo "::notice title=iOS simulator verification::$SUMMARY"
+          echo "::warning title=iOS simulator verification::$SUMMARY"
+
+      - name: Post verification summary as a commit comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          gh api "repos/$REPO/commits/$SHA/comments" -f body="**iOS simulator verification** ($(date -u +%FT%TZ))
+          \`\`\`
+          $(cat verification.txt)
+          \`\`\`" || echo "comment post failed (non-fatal)"
 
       - name: Upload verification artifacts
         uses: actions/upload-artifact@v4
