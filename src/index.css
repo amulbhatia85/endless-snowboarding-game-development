@@ -1441,22 +1441,65 @@ kbd {
 .privacy-copy strong { color: #f5f2e9; }
 
 /* ───────── Crash / revive and pause ───────── */
-.crash-overlay { background: rgba(8, 19, 30, 0.34); }
-.crash-content { width: min(560px, 100%); }
-.crash-stats { display: flex; justify-content: center; flex-wrap: wrap; gap: 12px 22px; margin: 22px 0 24px; color: rgba(245, 242, 233, 0.52); font-size: 8px; font-weight: 700; letter-spacing: 0.14em; }
-.crash-stats b { color: #f5f2e9; font-size: 13px; }
-/* Playtest fix — the revive offer used to be an oversized standalone button
-   floating above the row. It now sits in the same one-line row as Restart
-   Level and End Run, sized to match them; its gold primary colour stays. */
-.revive-button {
-  min-height: 44px;
-  min-width: 132px;
-  margin: 0;
-  padding: 0 13px;
-  gap: 8px;
-  justify-content: center;
+/* Playtest fix — the revive screen blurs (and slightly deepens) the frozen
+   game scene behind it so the panel reads as a pause, not a sticker. */
+.crash-overlay {
+  background: rgba(8, 19, 30, 0.44);
+  -webkit-backdrop-filter: blur(9px);
+  backdrop-filter: blur(9px);
 }
-.revive-button:disabled, .result-actions button:disabled { opacity: 0.55; cursor: wait; transform: none; }
+.crash-content { width: min(560px, 100%); }
+/* Playtest fix — the crash head is two columns: the "Revive ?" copy on the
+   left, the run stats (score / meters / glowstones / speed) on the right. */
+.crash-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 14px 26px;
+  margin-bottom: 24px;
+  text-align: left;
+}
+.crash-head .eyebrow { justify-content: flex-start; }
+.crash-head h2 { margin: 12px 0 7px; font-size: clamp(27px, 3.6vw, 38px); }
+.crash-stats {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 9px 20px;
+  justify-content: end;
+  margin: 4px 0 0;
+  text-align: right;
+  color: rgba(245, 242, 233, 0.52);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+}
+.crash-stats b { color: #f5f2e9; font-size: 13px; }
+/* Playtest fix — the revive offer is a compact gold video button: a video
+   glyph with a very small caption underneath, sitting in the same one-line
+   row as Restart Level and End Run. */
+.revive-video {
+  display: grid;
+  place-items: center;
+  gap: 3px;
+  min-width: 96px;
+  min-height: 54px;
+  margin: 0;
+  padding: 7px 15px 6px;
+  border: 0;
+  border-radius: 5px;
+  background: #f0c896;
+  color: #23384a;
+  font: inherit;
+  cursor: pointer;
+  box-shadow: 0 8px 28px rgba(9, 24, 38, 0.12);
+  transition: background 180ms ease, transform 180ms ease, box-shadow 180ms ease;
+}
+.revive-video svg { width: 22px; height: 17px; }
+.revive-video small { font-size: 7px; font-weight: 700; letter-spacing: 0.13em; }
+.revive-video:hover:not(:disabled) { transform: translateY(-2px); background: #f7d8ad; box-shadow: 0 11px 32px rgba(9, 24, 38, 0.2); }
+.revive-video:disabled { opacity: 0.55; cursor: wait; transform: none; }
+.result-actions button:disabled { opacity: 0.55; cursor: wait; transform: none; }
 .ad-unavailable, .ad-notice { max-width: 340px; margin: 0 auto; color: rgba(245, 242, 233, 0.58); font-size: 11px; line-height: 1.55; }
 .ad-notice { margin-top: 13px; color: #f0c896; }
 .end-run-button {
@@ -1896,8 +1939,8 @@ kbd {
   justify-content: center;
   flex-wrap: wrap;
 }
-.crash-secondary .end-run-button,
-.crash-secondary .revive-button { margin-top: 0; }
+.crash-secondary .end-run-button { margin-top: 0; }
+.crash-secondary { margin-top: 4px; }
 
 /* Phase 9A — developer obstacle preview selector (dev bar, ?dev=1 only). */
 .dev-obstacle-select {

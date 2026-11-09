@@ -559,3 +559,21 @@ row, left to right: **Watch Ad & Revive · Restart Level · End Run**.
   (screenshots in `qa/phase11-revive-row/`). The web build (where the
   revive offer is absent — rewarded ads are native-only) renders the
   two-button row on one line in the real app.
+
+## Revive screen polish (round 2)
+
+- The frozen game scene **blurs** behind the crash overlay
+  (`backdrop-filter: blur(9px)` + slightly deeper tint).
+- The crash head is now two columns: "Revive ?" (unbolded, was a heavy
+  strong) with the reason and level line on the left, and the four run
+  stats (score / meters / glowstones / speed) on the right.
+- Clear breathing room between the reason text and the action row
+  (~45–70 px measured).
+- "Watch Ad & Revive" is replaced by a compact gold **video button** —
+  video glyph with a very small "WATCH AD" caption underneath — in the
+  same one-line row as Restart Level and End Run (all 54 px tall).
+
+Verified: real web crash screen (blur computed, stats right of copy,
+70 px gap, one-line buttons, no console errors) and the native 3-button
+row with the built stylesheet at 844×390 (screenshots in
+`qa/phase11-revive-row/`). Suite 245/245, tsc clean.

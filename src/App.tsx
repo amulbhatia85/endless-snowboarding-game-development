@@ -106,6 +106,15 @@ function BrandMark() {
   );
 }
 
+function VideoIcon() {
+  return (
+    <svg viewBox="0 0 24 18" aria-hidden="true">
+      <rect x="0.9" y="0.9" width="22.2" height="16.2" rx="3.5" fill="none" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M9.6 5.4v7.2l6.3-3.6z" fill="currentColor" />
+    </svg>
+  );
+}
+
 function ArrowIcon() {
   return (
     <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -1383,28 +1392,33 @@ export default function App() {
       {screen === 'crashed' && crashResult && (
         <section className="state-overlay crash-overlay" aria-labelledby="crash-title">
           <div className="state-content crash-content">
-            <div className="eyebrow"><span className="eyebrow-dot" />THE MOUNTAIN PAUSES</div>
-            <h2 id="crash-title"><strong>Revive ?</strong></h2>
-            <p className="result-reason">{crashResult.reason}</p>
-            <div className="crash-stats">
-              <span><b>{formatNumber(crashResult.score)}</b> SCORE</span>
-              <span><b>{formatNumber(crashResult.distance)}</b> METERS</span>
-              <span><b>{formatNumber(crashResult.coins)}</b> GLOWSTONES</span>
-              <span><b>{formatNumber(crashResult.speedKmh)}</b> KM/H</span>
+            <div className="crash-head">
+              <div className="crash-copy">
+                <div className="eyebrow"><span className="eyebrow-dot" />THE MOUNTAIN PAUSES</div>
+                <h2 id="crash-title">Revive ?</h2>
+                <p className="result-reason">{crashResult.reason}</p>
+                {crashResult.level && (
+                  <p className="crash-level">LEVEL {crashResult.level.number} · {crashResult.level.name.toUpperCase()}</p>
+                )}
+              </div>
+              <div className="crash-stats">
+                <span><b>{formatNumber(crashResult.score)}</b> SCORE</span>
+                <span><b>{formatNumber(crashResult.distance)}</b> METERS</span>
+                <span><b>{formatNumber(crashResult.coins)}</b> GLOWSTONES</span>
+                <span><b>{formatNumber(crashResult.speedKmh)}</b> KM/H</span>
+              </div>
             </div>
-            {crashResult.level && (
-              <p className="crash-level">LEVEL {crashResult.level.number} · {crashResult.level.name.toUpperCase()}</p>
-            )}
             {adNotice && <p className="ad-notice">{adNotice}</p>}
             {!rewardedReady && (
               <p className="ad-unavailable">{ads.isNative ? 'Preparing a rewarded ad...' : 'Rewarded ads are available in the Android app.'}</p>
             )}
-            {/* Playtest fix — the revive offer joins the same one-line row as
-                Restart Level and End Run, sized to match them. */}
+            {/* Playtest fix — one-line actions: a compact video button (tiny
+                caption under the glyph) plus Restart Level and End Run. */}
             <div className="crash-secondary">
               {rewardedReady && (
-                <button className="primary-button revive-button" onClick={watchRewardedRevive} disabled={adBusy}>
-                  <span>{adBusy ? 'Opening ad...' : 'Watch Ad & Revive'}</span><span className="button-arrow"><ArrowIcon /></span>
+                <button className="revive-video" onClick={watchRewardedRevive} disabled={adBusy} aria-label="Watch a video to revive this run">
+                  <VideoIcon />
+                  <small>{adBusy ? 'OPENING…' : 'WATCH AD'}</small>
                 </button>
               )}
               <button className="end-run-button" onClick={restartFromCrash} disabled={adBusy}>Restart Level</button>
