@@ -1392,10 +1392,10 @@ export default function App() {
       {screen === 'crashed' && crashResult && (
         <section className="state-overlay crash-overlay" aria-labelledby="crash-title">
           <div className="state-content crash-content">
+            <div className="eyebrow"><span className="eyebrow-dot" />THE MOUNTAIN PAUSES</div>
             <div className="crash-head">
               <div className="crash-copy">
-                <div className="eyebrow"><span className="eyebrow-dot" />THE MOUNTAIN PAUSES</div>
-                <h2 id="crash-title">Revive ?</h2>
+                <h2 id="crash-title">Revive?</h2>
                 <p className="result-reason">{crashResult.reason}</p>
                 {crashResult.level && (
                   <p className="crash-level">LEVEL {crashResult.level.number} · {crashResult.level.name.toUpperCase()}</p>
@@ -1408,23 +1408,26 @@ export default function App() {
                 <span><b>{formatNumber(crashResult.speedKmh)}</b> KM/H</span>
               </div>
             </div>
-            {adNotice && <p className="ad-notice">{adNotice}</p>}
-            {!rewardedReady && (
-              <p className="ad-unavailable">{ads.isNative ? 'Preparing a rewarded ad...' : 'Rewarded ads are available in the Android app.'}</p>
-            )}
-            {/* Playtest fix — one-line actions: a compact video button (tiny
-                caption under the glyph) plus Restart Level and End Run. */}
-            <div className="crash-secondary">
+            {/* Playtest fix — redesigned crash card: gold video CTA on the
+                left, Restart Level / End Run grouped right, one line; the ad
+                note moves to a tiny footnote below the actions. */}
+            <div className={rewardedReady ? 'crash-secondary' : 'crash-secondary no-revive'}>
               {rewardedReady && (
                 <button className="revive-video" onClick={watchRewardedRevive} disabled={adBusy} aria-label="Watch a video to revive this run">
                   <VideoIcon />
                   <small>{adBusy ? 'OPENING…' : 'WATCH AD'}</small>
                 </button>
               )}
-              <button className="end-run-button" onClick={restartFromCrash} disabled={adBusy}>Restart Level</button>
-              <button className="end-run-button" onClick={endRun} disabled={adBusy}>End Run</button>
+              <div className="crash-secondary-group">
+                <button className="end-run-button" onClick={restartFromCrash} disabled={adBusy}>Restart Level</button>
+                <button className="end-run-button" onClick={endRun} disabled={adBusy}>End Run</button>
+              </div>
             </div>
-            <span className="revive-rule">Complete a rewarded ad to continue this run</span>
+            {(adNotice || !rewardedReady) && (
+              <p className="crash-footnote">
+                {adNotice || (ads.isNative ? 'Preparing a rewarded ad...' : 'Rewarded ads are available in the Android app.')}
+              </p>
+            )}
           </div>
         </section>
       )}

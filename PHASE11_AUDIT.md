@@ -577,3 +577,27 @@ Verified: real web crash screen (blur computed, stats right of copy,
 70 px gap, one-line buttons, no console errors) and the native 3-button
 row with the built stylesheet at 844×390 (screenshots in
 `qa/phase11-revive-row/`). Suite 245/245, tsc clean.
+
+## Revive screen relayout (round 3 — redesign)
+
+The crash screen is now a composed card instead of floating text:
+
+- **Glass card** — dark translucent panel (hairline border, 18px radius,
+  soft shadow) over the blurred frozen scene; reads as one object.
+- **Two-column head** — eyebrow / "Revive?" (light 430 weight) / reason /
+  level line on the left; the four run stats as a right-aligned
+  scoreboard rail (bright values, tiny tracked labels) on the right.
+- **Hairline divider** between the head and the actions.
+- **One-line action row** — gold video CTA (glyph + tiny WATCH AD
+  caption) on the left, Restart Level / End Run grouped as quiet glass
+  buttons on the right; on web (no revive offer) the two buttons center.
+- **Footnote** — the ad note moved below the buttons, tiny and centered;
+  the redundant "Complete a rewarded ad to continue" line was dropped.
+- Short-viewport media query keeps the card inside the screen down to
+  568×320 landscape.
+
+Verified: real web crash screen (card fits, stats rail right-aligned in
+one column, 68px text→button gap, footnote 14px below, blur active, no
+console errors) and the native 3-button card with the built stylesheet
+at 844×390 and 568×320 (fits, one line, gold CTA left, group right) —
+screenshots in `qa/phase11-revive-row/`. Suite 245/245, tsc clean.
