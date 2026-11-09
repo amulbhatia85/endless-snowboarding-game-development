@@ -6,6 +6,14 @@ name: Build Android APK
 # Android project or the build config.
 on:
   workflow_dispatch:
+  # Fires only when this workflow file itself changes (kept so the build
+  # can be regenerated from this branch on demand; game-code pushes do
+  # NOT trigger it — dispatch from a non-default branch is not supported).
+  push:
+    branches:
+      - arena/14aaea8f-endless-snowboarding-game-deve
+    paths:
+      - .github/workflows/build-android.yml
 
 jobs:
   apk:
