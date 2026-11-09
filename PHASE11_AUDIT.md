@@ -610,3 +610,29 @@ log caught your wheel"). The new title flows from the reason line and
 the gold WATCH AD button is its direct answer. Verified on the real
 web crash screen (title renders, card fits, no console errors) and the
 native card at 844×390 / 568×320. Suite 245/245, tsc clean.
+
+## Level-completion hold time (playtest feedback)
+
+Entering the safe house auto-advanced after 3.1s — the reward lines
+(glowstones, completion bonus, clean run, backflips, milestone, total)
+came and went before they could be read. The completion card now holds
+for **6.5 seconds** (`levelManager.ts` → `transitions.end
+.completionSeconds`, was 3.1). A press after the existing 1.1s grace
+still continues early ("TAP TO CONTINUE" already fades in at 1.1s), so
+fast readers are never held hostage.
+
+Verified:
+- New regression test (`tests/transition.test.mjs` — "The completion
+  card holds long enough to read the level rewards") drives the real
+  engine through the arrival and asserts the card holds ≥ 6s of game
+  time and still auto-continues. Suite 246/246, tsc clean.
+- Real rendered app (production build): resumed a crafted parked run
+  sitting exactly at the 50,000-point target so the arrival begins
+  immediately — the card renders with all reward lines and the phase
+  machine runs riding → arrival → celebrating (card) → exiting →
+  riding with zero console errors. Wall-clock hold in the headless
+  software renderer stretches (~14.5s at ~4.5fps because the engine
+  clamps frame delta at 0.1s); on a real 60fps device it is the
+  intended ~6.5s. A pixel screenshot of the live card is not capturable
+  in this sandbox (CDP capture deadlocks under the single-process
+  chromium with an active rAF loop) — DOM-level verification above.
