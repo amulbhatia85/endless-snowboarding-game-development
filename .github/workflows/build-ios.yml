@@ -1,0 +1,210 @@
+name: Build iOS
+
+# Builds the Capacitor iOS app on a GitHub-hosted Mac and launches it on an
+# iOS Simulator — no local Mac required. Runs on manual dispatch, and on
+# pushes that touch the iOS project, the game code or the build config
+# (private repos bill macOS minutes at 10x, so docs/test-only pushes never
+# trigger it).
+on:
+  workflow_dispatch:
+  # Fires only when this workflow file itself changes (kept so the build
+  # can be regenerated from this branch on demand; game-code pushes do
+  # NOT trigger it until the playtest flow is signed off).
+  push:
+    branches:
+      - arena/62ca48ad-endless-snowboarding-game-deve
+    paths:
+      - .github/workflows/build-ios.yml
+
+jobs:
+  simulator:
+    name: Build & launch on iOS Simulator
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Select the newest Xcode
+        run: |
+          XCODE=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the web game
+        run: npm run build
+
+      - name: Sync into the iOS project
+        run: npx cap sync ios
+
+      - name: Build the app for iOS Simulator (unsigned)
+        run: |
+          cd ios/App
+          xcodebuild -project App.xcodeproj -scheme App \
+            -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO build
+
+      - name: Build the app for iOS devices (unsigned)
+        run: |
+          cd ios/App
+          xcodebuild -project App.xcodeproj -scheme App \
+            -configuration Debug \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build-device \
+            CODE_SIGNING_ALLOWED=NO build
+
+      # An unsigned device IPA: installable on a real iPhone once it is
+      # re-signed with an Apple ID (Sideloadly / AltStore on any computer,
+      # or Xcode on a Mac). Simulator apps cannot run on devices, so this
+      # is the package non-Mac users actually sideload.
+      - name: Package the unsigned device IPA
+        run: |
+          cd ios/App/build-device/Build/Products/Debug-iphoneos
+          mkdir -p Payload
+          cp -R App.app Payload/
+          zip -qry9 "$GITHUB_WORKSPACE/Afterglow-iOS-unsigned.ipa" Payload
+          ls -la "$GITHUB_WORKSPACE/Afterglow-iOS-unsigned.ipa"
+
+      - name: Package the simulator app
+        run: |
+          cd ios/App/build/Build/Products/Debug-iphonesimulator
+          zip -qry9 "$GITHUB_WORKSPACE/Afterglow-iOS-simulator-app.zip" App.app
+          ls -la "$GITHUB_WORKSPACE/Afterglow-iOS-simulator-app.zip"
+
+      - name: Boot a simulator, install and launch the app
+        run: |
+          UDID=$(xcrun simctl list devices available | grep -E 'iPhone' | head -1 | sed -E 's/.*\(([A-F0-9-]{36})\).*/\1/')
+          if [ -z "$UDID" ]; then echo "No iPhone simulator available"; exit 1; fi
+          DEVICE=$(xcrun simctl list devices available | grep "$UDID" | sed -E 's/[-(].*//' | xargs)
+          echo "Booting simulator $UDID ($DEVICE)"
+          xcrun simctl bootstatus "$UDID" -b
+          xcrun simctl install "$UDID" ios/App/build/Build/Products/Debug-iphonesimulator/App.app
+          xcrun simctl launch "$UDID" com.afterglow.snowboard
+          sleep 18
+          xcrun simctl io "$UDID" screenshot --type=png screenshot-1-menu.png
+          sleep 6
+          xcrun simctl io "$UDID" screenshot --type=png screenshot-2.png
+          ALIVE=no
+          if xcrun simctl spawn "$UDID" launchctl list | grep -q com.afterglow.snowboard; then
+            ALIVE=yes
+            echo "App process alive after launch"
+          else
+            echo "WARNING: app process not found — possible crash"
+          fi
+          xcrun simctl spawn "$UDID" log show --last 2m --predicate 'processImagePath CONTAINS "App"' > app-log.txt || true
+          JSERRORS=$(grep -ciE 'fatal|terminating|uncaught|WKErrorDomain' app-log.txt || true)
+          echo "ALIVE=$ALIVE DEVICE=$DEVICE JSERROR_LINES=$JSERRORS" >> verification.txt
+          grep -iE 'fatal|terminating|uncaught|WKErrorDomain' app-log.txt | head -8 | cut -c1-220 >> verification.txt || true
+
+      # Pixel analysis of the screenshots, run on the runner and reported via
+      # check-run annotations (so the data is visible through the GitHub API
+      # even where artifact/log downloads are network-restricted).
+      - name: Analyze the screenshots
+        run: |
+          node --input-type=module <<'EOF'
+          import fs from 'node:fs';
+          import zlib from 'node:zlib';
+
+          function analyze(file) {
+            const buf = fs.readFileSync(file);
+            let pos = 8, width = 0, height = 0, bitDepth = 0, colorType = 0;
+            const idat = [];
+            while (pos < buf.length) {
+              const len = buf.readUInt32BE(pos);
+              const type = buf.toString('ascii', pos + 4, pos + 8);
+              const data = buf.subarray(pos + 8, pos + 8 + len);
+              if (type === 'IHDR') {
+                width = data.readUInt32BE(0); height = data.readUInt32BE(4);
+                bitDepth = data[8]; colorType = data[9];
+              } else if (type === 'IDAT') idat.push(data);
+              else if (type === 'IEND') break;
+              pos += 12 + len;
+            }
+            if (bitDepth !== 8 || (colorType !== 2 && colorType !== 6)) return { width, height, note: `unsupported ${bitDepth}/${colorType}` };
+            const raw = zlib.inflateSync(Buffer.concat(idat));
+            const bpp = colorType === 6 ? 4 : 3, stride = width * bpp;
+            const rows = [];
+            let o = 0;
+            for (let y = 0; y < height; y += 1) {
+              const filter = raw[o]; o += 1;
+              const row = Buffer.from(raw.subarray(o, o + stride)); o += stride;
+              const prev = rows[y - 1];
+              for (let x = 0; x < stride; x += 1) {
+                const a = x >= bpp ? row[x - bpp] : 0;
+                const b = prev ? prev[x] : 0;
+                const c = x >= bpp && prev ? prev[x - bpp] : 0;
+                if (filter === 1) row[x] = (row[x] + a) & 255;
+                else if (filter === 2) row[x] = (row[x] + b) & 255;
+                else if (filter === 3) row[x] = (row[x] + ((a + b) >> 1)) & 255;
+                else if (filter === 4) {
+                  const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+                  row[x] = (row[x] + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c)) & 255;
+                }
+              }
+              rows.push(row);
+            }
+            let rSum = 0, gSum = 0, bSum = 0, darkBrand = 0, n = 0;
+            const buckets = new Set();
+            for (let y = 0; y < height; y += 3) {
+              for (let x = 0; x < width; x += 3) {
+                const i = x * bpp, r = rows[y][i], g = rows[y][i + 1], b = rows[y][i + 2];
+                rSum += r; gSum += g; bSum += b; n += 1;
+                buckets.add(`${r >> 4},${g >> 4},${b >> 4}`);
+                if (Math.abs(r - 16) < 26 && Math.abs(g - 32) < 26 && Math.abs(b - 50) < 30) darkBrand += 1;
+              }
+            }
+            return { width, height, mean: Math.round((rSum + gSum + bSum) / (3 * n)), darkBrandPct: Math.round((100 * darkBrand) / n), buckets: buckets.size };
+          }
+
+          for (const f of ['screenshot-1-menu.png', 'screenshot-2.png']) {
+            const s = analyze(f);
+            fs.appendFileSync('verification.txt', ` ${f}: ${JSON.stringify(s)}`);
+            console.log(f, JSON.stringify(s));
+          }
+          EOF
+          cat verification.txt
+          SUMMARY=$(cat verification.txt)
+          echo "::warning title=iOS simulator verification::$SUMMARY"
+
+      - name: Post verification summary as a commit comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          gh api "repos/$REPO/commits/$SHA/comments" -f body="**iOS simulator verification** ($(date -u +%FT%TZ))
+          \`\`\`
+          $(cat verification.txt)
+          \`\`\`" || echo "comment post failed (non-fatal)"
+
+      - name: Upload verification artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ios-simulator-verification
+          path: |
+            screenshot-1-menu.png
+            screenshot-2.png
+            app-log.txt
+            verification.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload the iOS app packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: Afterglow-iOS-packages
+          path: |
+            Afterglow-iOS-unsigned.ipa
+            Afterglow-iOS-simulator-app.zip
+          if-no-files-found: error
+          retention-days: 14

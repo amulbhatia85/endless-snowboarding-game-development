@@ -3,9 +3,14 @@ import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import { Haptics, ImpactStyle, NotificationType } from '@capacitor/haptics';
 import { SnowGameEngine, type GameScreen, type GraphicsQuality, type HudSnapshot, type RunResult, type SoundEvent } from './game/engine';
+import { EVENT_DEFINITIONS, type EventId } from './game/events';
 import { AudioManager, type AudioSettings } from './game/audio';
 import { AdService } from './game/ads';
-import { BIKES, RIDERS, MISSION_BONUS } from './game/progression';
+import {
+  BIKES, RIDERS, TRAILS, MISSION_BONUS,
+  isUnlocked, requirementsMet, requirementText, resolveSelections,
+  type CosmeticEntry, type UnlockContext,
+} from './game/progression';
 import {
   getAchievements,
   persistUnlockedAchievements,
@@ -26,6 +31,8 @@ interface ScoreEntry {
 const IS_ANDROID = Capacitor.isNativePlatform() && Capacitor.getPlatform() === 'android';
 
 const SCORE_KEY = 'afterglow-snow-scores-v1';
+/** Phase 10D — release version shown in Settings (single source of truth). */
+const APP_VERSION = '1.0.0';
 
 const emptyHud: HudSnapshot = { score: 0, distance: 0, speedKmh: 0, coins: 0, combo: 0, elapsed: 0, powers: [] };
 
@@ -48,13 +55,14 @@ function formatNumber(value: number): string {
   return Math.max(0, Math.floor(value)).toLocaleString('en-US');
 }
 
-type MenuView = 'home' | 'achievements' | 'leaderboard' | 'settings' | 'how' | 'credits' | 'privacy';
+type MenuView = 'home' | 'achievements' | 'leaderboard' | 'rewards' | 'settings' | 'how' | 'credits' | 'privacy';
 
 interface PlayerPreferences {
   vibration: boolean;
   quality: GraphicsQuality;
   bike: string;
   rider: string;
+  trail: string;
 }
 
 const PREFERENCES_KEY = 'afterglow-preferences-v1';
@@ -66,10 +74,11 @@ function readPreferences(): PlayerPreferences {
       vibration: parsed.vibration !== false,
       bike: typeof parsed.bike === 'string' ? parsed.bike : BIKES[0].name,
       rider: typeof parsed.rider === 'string' ? parsed.rider : RIDERS[0].name,
+      trail: typeof parsed.trail === 'string' ? parsed.trail : TRAILS[0].name,
       quality: parsed.quality === 'high' || parsed.quality === 'balanced' ? parsed.quality : 'auto',
     };
   } catch {
-    return { vibration: true, quality: 'auto', bike: BIKES[0].name, rider: RIDERS[0].name };
+    return { vibration: true, quality: 'auto', bike: BIKES[0].name, rider: RIDERS[0].name, trail: TRAILS[0].name };
   }
 }
 
@@ -138,6 +147,63 @@ function formatDate(value: string): string {
 
 const MILESTONES = [500, 1000, 2500, 5000, 10000, 20000];
 
+// Phase 5A audit tool: `?dev=1` reveals the developer level selector (levels
+// 1–4, in-memory only — saved progression is never touched) and the engine's
+// diagnostics overlay. Purely a testing aid; invisible in normal play.
+// Phase 10D: developer URL parameters are only honoured in development
+// builds — the production bundle ignores them entirely.
+const DEV_MODE = import.meta.env.DEV
+  && typeof window !== 'undefined'
+  && new URLSearchParams(window.location.search).get('dev') === '1';
+const DEV_LEVELS: { level: number; label: string }[] = [
+  { level: 1, label: 'Green Hills' },
+  { level: 2, label: 'Snowy Mountains' },
+  { level: 3, label: 'Misty Mountains' },
+  { level: 4, label: 'Moonlit Forest' },
+];
+// Phase 9B audit tools: pin the weather and freeze the day cycle so every
+// condition can be previewed in each of the four environments.
+const DEV_WEATHER: { id: string; label: string }[] = [
+  { id: 'auto', label: 'Weather…' },
+  { id: 'clear', label: 'Clear' },
+  { id: 'snow', label: 'Snow' },
+  { id: 'fog', label: 'Fog' },
+  { id: 'wind', label: 'Wind' },
+  { id: 'storm', label: 'Storm' },
+];
+const DEV_PHASES: { id: string; label: string }[] = [
+  { id: 'auto', label: 'Time…' },
+  { id: '0.06', label: 'Dawn' },
+  { id: '0.4', label: 'Day' },
+  { id: '0.66', label: 'Sunset' },
+  { id: '0.9', label: 'Night' },
+];
+// Phase 9D audit tool: force/inspect special events (in-memory only).
+const DEV_EVENTS: { id: string; label: string }[] = [
+  { id: 'auto', label: 'Event…' },
+  { id: 'none', label: 'No events' },
+  ...EVENT_DEFINITIONS.map((definition) => ({ id: definition.id, label: definition.label })),
+];
+// Phase 9A audit tool: per-obstacle preview ids (validated placements only).
+const DEV_OBSTACLES: { id: string; label: string }[] = [
+  { id: 'rock', label: 'Rock' },
+  { id: 'log', label: 'Log' },
+  { id: 'tree', label: 'Tree' },
+  { id: 'root', label: 'Root' },
+  { id: 'fence', label: 'Fence' },
+  { id: 'gap', label: 'Gap' },
+  { id: 'cliff', label: 'Cliff' },
+  { id: 'bridge', label: 'Rope bridge' },
+  { id: 'broken-bridge', label: 'Broken bridge' },
+  { id: 'moving-platform', label: 'Moving platform' },
+  { id: 'ramp', label: 'Ramp' },
+  { id: 'ice', label: 'Ice patch' },
+  { id: 'icicle', label: 'Icicle' },
+  { id: 'snowball', label: 'Snowball' },
+  { id: 'swinging-log', label: 'Swinging log' },
+  { id: 'branch', label: 'Falling branch' },
+];
+
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const engineRef = useRef<SnowGameEngine | null>(null);
@@ -156,8 +222,17 @@ export default function App() {
   const [lifetime, setLifetime] = useState<LifetimeStats>(() => readLifetime(readScores()));
   const [showSettings, setShowSettings] = useState(false);
   const [menuView, setMenuView] = useState<MenuView>('home');
+  // Phase 7 — wallet mirror for the rewards UI (refreshed on surface changes).
+  const [walletView, setWalletView] = useState(() => engineRef.current?.getWalletView()
+    ?? { balance: 0, lifetimeEarned: 0, owned: [] as readonly string[], rewardedThrough: 0 });
   const [splashDone, setSplashDone] = useState(false);
   const [hasParkedRun, setHasParkedRun] = useState(false);
+  const [obstaclePreview, setObstaclePreview] = useState('');
+  const [weatherPreview, setWeatherPreview] = useState('auto');
+  const [dayPreview, setDayPreview] = useState('auto');
+  const [eventPreview, setEventPreview] = useState('auto');
+  const [levelJump, setLevelJump] = useState('');
+  const [levelInfoOpen, setLevelInfoOpen] = useState(false);
   const [rewardedReady, setRewardedReady] = useState(false);
   const [adBusy, setAdBusy] = useState(false);
   const [adNotice, setAdNotice] = useState('');
@@ -308,7 +383,7 @@ export default function App() {
         if (newRecord && previous.length > 0 && !runRef.current.recordAnnounced) audio.recordCue();
         void ads.prepareInterstitial();
       },
-    }, IS_ANDROID);
+    }, IS_ANDROID, import.meta.env.DEV);
 
     engineRef.current = engine;
     setHasParkedRun(engine.hasParkedRun);
@@ -318,9 +393,10 @@ export default function App() {
     };
   }, [audio, ads]);
 
-  useEffect(() => {
-    if (hud.level?.phase === 'celebrating') audio.achievement();
-  }, [audio, hud.level?.phase, hud.level?.number]);
+  // Phase 10B — the level-completion cue now arrives as a 'complete' sound
+  // event emitted by the engine the moment the rider settles inside the safe
+  // house (see onSound → audio.handle), replacing the generic achievement
+  // chime that used to fire here off the HUD phase.
 
   // Studio splash timing. The game world is already rendering behind it, so
   // this also acts as the asset warm-up window without blocking first paint.
@@ -392,10 +468,22 @@ export default function App() {
   }, [preferences.quality]);
 
   useEffect(() => {
-    const bike = BIKES.find((item) => item.name === preferences.bike && lifetime.bestDistance >= item.meters) ?? BIKES[0];
-    const rider = RIDERS.find((item) => item.name === preferences.rider && lifetime.bestTricks >= item.flips) ?? RIDERS[0];
-    engineRef.current?.setRiderSetup(bike, rider);
-  }, [preferences.bike, preferences.rider, lifetime.bestDistance, lifetime.bestTricks]);
+    // Phase 7 — resolve the equipped skins, falling back to the defaults when
+    // the preference points at a locked item (locked cosmetics never equip).
+    const engine = engineRef.current;
+    if (!engine) return;
+    const context: UnlockContext = engine.unlockContext();
+    const { bike, rider, trail } = resolveSelections(preferences, {
+      ...context,
+      bestDistance: lifetime.bestDistance,
+      bestTricks: lifetime.bestTricks,
+      achievements: [
+        ...context.achievements,
+        ...getAchievements(lifetime).filter((achievement) => achievement.unlocked).map((achievement) => achievement.id),
+      ],
+    });
+    engine.setRiderSetup(bike, rider, trail);
+  }, [preferences, lifetime, walletView.owned]);
 
   // Android hardware back button + native foreground/background handling.
   useEffect(() => {
@@ -479,6 +567,26 @@ export default function App() {
     });
   };
 
+  // Phase 7 — keep the wallet mirror fresh whenever the player surfaces change.
+  useEffect(() => {
+    setWalletView(engineRef.current?.getWalletView()
+      ?? { balance: 0, lifetimeEarned: 0, owned: [] as readonly string[], rewardedThrough: 0 });
+  }, [screen, menuView, hud.level?.phase]);
+
+  /** Phase 7 — buys a cosmetic through the engine (single writer for the wallet). */
+  const buyCosmetic = (entry: CosmeticEntry): 'ok' | 'owned' | 'locked' | 'insufficient' | 'invalid' => {
+    const engine = engineRef.current;
+    if (!engine) return 'invalid';
+    const outcome = engine.purchaseUnlockable(entry.id);
+    if (outcome === 'ok') {
+      setWalletView(engine.getWalletView());
+      audio.achievement();
+    } else {
+      audio.click();
+    }
+    return outcome;
+  };
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -548,6 +656,10 @@ export default function App() {
     window.addEventListener('pointercancel', handlePointerUp);
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
+    // Phase 10C — long-press on touch devices must not raise the browser
+    // context menu over the play surface (jump-and-hold is a core control).
+    const handleContextMenu = (event: MouseEvent) => event.preventDefault();
+    canvas.addEventListener('contextmenu', handleContextMenu);
 
     return () => {
       canvas.removeEventListener('pointerdown', handlePointerDown);
@@ -555,6 +667,7 @@ export default function App() {
       window.removeEventListener('pointercancel', handlePointerUp);
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
+      canvas.removeEventListener('contextmenu', handleContextMenu);
     };
   }, []);
 
@@ -565,6 +678,81 @@ export default function App() {
     setMenuView('home');
     setHasParkedRun(false);
     engineRef.current?.start();
+  };
+
+  const jumpToLevel = (level: number) => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    audio.click();
+    setResult(null);
+    setCrashResult(null);
+    setShowSettings(false);
+    setMenuView('home');
+    setHasParkedRun(false);
+    engine.startLevelPreview(level);
+  };
+
+  // Phase 6 dev tool: jump straight to the cinematic final approach.
+  const finishLevelForTest = () => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    audio.click();
+    engine.devFinishLevel();
+  };
+
+  // Phase 9A dev tool: preview a single obstacle type end to end. Generation
+  // collapses to the chosen id but keeps running through the planner's full
+  // validation pipeline; empty selection restores the normal mix.
+  const previewObstacle = (id: string) => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    audio.click();
+    setObstaclePreview(id);
+    setResult(null);
+    setCrashResult(null);
+    setShowSettings(false);
+    setMenuView('home');
+    setHasParkedRun(false);
+    if (!engine.startObstaclePreview(id || null)) setObstaclePreview('');
+  };
+
+  // Phase 9B dev tools: pin the weather and freeze the time of day. Both are
+  // purely cosmetic overrides — generation, physics and progression are
+  // untouched, and 'auto' restores the live configuration.
+  const previewWeather = (id: string) => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    audio.click();
+    setWeatherPreview(id);
+    engine.setWeatherPreview(id as 'auto' | 'clear' | 'snow' | 'fog' | 'wind' | 'storm');
+  };
+
+  const previewDayPhase = (id: string) => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    audio.click();
+    setDayPreview(id);
+    engine.setDayPhasePreview(id === 'auto' ? null : Number(id));
+  };
+
+  // Phase 9D dev tool: force the next special event, suspend all events, or
+  // restore the deterministic schedule. In-memory only — generation seed,
+  // saved progression and rewards are untouched.
+  const previewEvent = (id: string) => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    audio.click();
+    setEventPreview(id);
+    engine.setEventPreview(id as 'auto' | 'none' | EventId);
+  };
+
+  // Phase 9C dev tool: jump to any generated level number (in-memory preview —
+  // saved progression is untouched), reproducing its exact deterministic
+  // configuration.
+  const jumpToAnyLevel = () => {
+    const parsed = Number.parseInt(levelJump, 10);
+    if (!Number.isInteger(parsed) || parsed < 1) return;
+    jumpToLevel(parsed);
   };
 
   const togglePause = () => engineRef.current?.togglePause();
@@ -598,6 +786,27 @@ export default function App() {
   const endRun = () => {
     audio.click();
     engineRef.current?.finalizeRun();
+  };
+
+  /**
+   * Phase 8 — RESTART on the crash screen. The crashed run is finalized
+   * exactly once first (coins banked, run recorded, achievements settled),
+   * any due interstitial plays, then the current level restarts from its
+   * beginning with a clean attempt. Completed levels, unlocks and the coin
+   * balance are untouched by design.
+   */
+  const restartFromCrash = async () => {
+    if (adBusy) return;
+    audio.click();
+    setAdBusy(true);
+    try {
+      engineRef.current?.finalizeRun();
+      await ads.showInterstitialIfDue();
+    } finally {
+      audio.setAdSuspended(false);
+      setAdBusy(false);
+    }
+    beginRun();
   };
 
   const watchRewardedRevive = async () => {
@@ -715,6 +924,87 @@ export default function App() {
       <canvas ref={canvasRef} className="game-canvas" aria-label="Afterglow endless snowboarding game" />
       <div className="scene-vignette" aria-hidden="true" />
 
+      {DEV_MODE && (
+        <div className="dev-level-bar" aria-label="Developer level selector (does not affect saved progress)">
+          <span className="dev-level-tag">DEV</span>
+          {DEV_LEVELS.map(({ level, label }) => (
+            <button
+              key={level}
+              type="button"
+              className={`dev-level-button${hud.level?.number === level ? ' active' : ''}`}
+              onClick={() => jumpToLevel(level)}
+            >
+              <em>{level}</em> {label}
+            </button>
+          ))}
+          <button type="button" className="dev-level-button dev-finish" onClick={finishLevelForTest}>
+            ⏭ Finish level
+          </button>
+          <select
+            className="dev-level-button dev-obstacle-select"
+            aria-label="Developer obstacle preview (validated single-obstacle generation)"
+            value={obstaclePreview}
+            onChange={(event) => previewObstacle(event.target.value)}
+          >
+            <option value="">Obstacle mix…</option>
+            {DEV_OBSTACLES.map(({ id, label }) => (
+              <option key={id} value={id}>{label}</option>
+            ))}
+          </select>
+          <select
+            className="dev-level-button dev-obstacle-select"
+            aria-label="Developer weather preview (cosmetic override)"
+            value={weatherPreview}
+            onChange={(event) => previewWeather(event.target.value)}
+          >
+            {DEV_WEATHER.map(({ id, label }) => (
+              <option key={id} value={id}>{label}</option>
+            ))}
+          </select>
+          <select
+            className="dev-level-button dev-obstacle-select"
+            aria-label="Developer time-of-day preview (freezes the day cycle)"
+            value={dayPreview}
+            onChange={(event) => previewDayPhase(event.target.value)}
+          >
+            {DEV_PHASES.map(({ id, label }) => (
+              <option key={id} value={id}>{label}</option>
+            ))}
+          </select>
+          <select
+            className="dev-level-button dev-obstacle-select"
+            aria-label="Developer special-event preview (forces the next event window)"
+            value={eventPreview}
+            onChange={(event) => previewEvent(event.target.value)}
+          >
+            {DEV_EVENTS.map(({ id, label }) => (
+              <option key={id} value={id}>{label}</option>
+            ))}
+          </select>
+          <input
+            className="dev-level-button dev-level-number"
+            aria-label="Developer level number (deterministic preview of any generated level)"
+            placeholder="Level #"
+            inputMode="numeric"
+            value={levelJump}
+            onChange={(event) => setLevelJump(event.target.value.replace(/[^0-9]/g, ''))}
+            onKeyDown={(event) => { if (event.key === 'Enter') jumpToAnyLevel(); }}
+          />
+          <button type="button" className="dev-level-button" onClick={jumpToAnyLevel}>
+            ↪ Go
+          </button>
+          <button type="button" className="dev-level-button" onClick={() => setLevelInfoOpen((open) => !open)}>
+            ℹ Level
+          </button>
+        </div>
+      )}
+
+      {DEV_MODE && levelInfoOpen && (
+        <pre className="dev-level-info" aria-label="Generated level recipe (deterministic reproduction data)">
+          {engineRef.current?.devLevelReport() ?? ''}
+        </pre>
+      )}
+
       {!splashDone && (
         <section className="studio-splash" aria-label="Shadows Game Studio" onClick={() => setSplashDone(true)}>
           <div className="splash-particles" aria-hidden="true">
@@ -805,6 +1095,17 @@ export default function App() {
               <span className="level-completion-rule" />
               <p>50,000 POINTS · A JOURNEY WELL RIDDEN</p>
               <h2>LEVEL {hud.level.number} COMPLETED</h2>
+              {hud.level.reward && (
+                <div className="level-rewards" aria-label="Glowstones earned this level">
+                  <span className="reward-line">{hud.level.reward.collected} GLOWSTONES COLLECTED</span>
+                  <span className="reward-line">COMPLETION +{hud.level.reward.completion}</span>
+                  {hud.level.reward.cleanRun > 0 && <span className="reward-line">CLEAN RUN +{hud.level.reward.cleanRun}</span>}
+                  {hud.level.reward.flips > 0 && <span className="reward-line">BACKFLIPS +{hud.level.reward.flips}</span>}
+                  {hud.level.reward.milestone > 0 && <span className="reward-line">LEVEL MILESTONE +{hud.level.reward.milestone}</span>}
+                  <span className="reward-line reward-total">TOTAL +{hud.level.reward.total}</span>
+                </div>
+              )}
+              <span className="level-continue-hint">TAP TO CONTINUE</span>
               <span className="level-completion-rule" />
             </div>
           )}
@@ -851,6 +1152,9 @@ export default function App() {
             )}
             <button className="menu-button" onClick={() => { audio.click(); setMenuView('achievements'); }}>
               <span><strong>Achievements</strong><small>{achievements.filter((item) => item.unlocked).length} of {achievements.length} unlocked</small></span><span className="button-arrow"><ArrowIcon /></span>
+            </button>
+            <button className="menu-button" onClick={() => { audio.click(); setMenuView('rewards'); }}>
+              <span><strong>Rewards</strong><small><span className="menu-gem" aria-hidden="true">◆</span> {formatNumber(walletView.balance)} glowstones · riders, bikes & trails</small></span><span className="button-arrow"><ArrowIcon /></span>
             </button>
             <button className="menu-button" onClick={() => { audio.click(); setMenuView('leaderboard'); }}>
               <span><strong>Leaderboard</strong><small>Your best local rides</small></span><span className="button-arrow"><ArrowIcon /></span>
@@ -912,6 +1216,74 @@ export default function App() {
               </>
             )}
 
+            {menuView === 'rewards' && (
+              <>
+                <div className="eyebrow"><span className="eyebrow-dot" />EARN & EQUIP</div>
+                <h2 id="menu-page-title">Rewards</h2>
+                <p className="page-intro">Glowstones gathered on the trail fund riders, bicycles and trails.</p>
+                <div className="wallet-balance" role="status" aria-label="Glowstone balance">
+                  <span className="wallet-gem" aria-hidden="true">◆</span>
+                  <strong>{formatNumber(walletView.balance)}</strong>
+                  <small>GLOWSTONES</small>
+                </div>
+                {([
+                  { title: 'Characters', hint: 'Ride farther and land flips — or spend glowstones', items: RIDERS as readonly CosmeticEntry[], selected: preferences.rider, apply: (name: string) => updatePreferences({ rider: name }) },
+                  { title: 'Bicycles', hint: 'Cosmetic only — every frame rides the same', items: BIKES as readonly CosmeticEntry[], selected: preferences.bike, apply: (name: string) => updatePreferences({ bike: name }) },
+                  { title: 'Trails', hint: 'A touch of colour behind the wheel', items: TRAILS as readonly CosmeticEntry[], selected: preferences.trail, apply: (name: string) => updatePreferences({ trail: name }) },
+                ]).map((section) => {
+                  const context: UnlockContext = {
+                    bestDistance: lifetime.bestDistance,
+                    bestTricks: lifetime.bestTricks,
+                    completedLevels: engineRef.current?.levels.completedThrough ?? 0,
+                    owned: walletView.owned,
+                    achievements: getAchievements(lifetime).filter((achievement) => achievement.unlocked).map((achievement) => achievement.id),
+                  };
+                  return (
+                    <section className="rewards-section" key={section.title} aria-label={section.title}>
+                      <header>
+                        <h3>{section.title}</h3>
+                        <p>{section.hint}</p>
+                      </header>
+                      <div className="reward-grid">
+                        {section.items.map((entry) => {
+                          const unlocked = isUnlocked(entry, context);
+                          const equipped = section.selected === entry.name && unlocked;
+                          const purchasable = !unlocked && requirementsMet(entry, context);
+                          return (
+                            <article key={entry.id} className={`reward-card${equipped ? ' selected' : ''}${unlocked ? '' : ' locked'}`}>
+                              <div className="reward-swatch" aria-hidden="true">
+                                {'coat' in entry ? (
+                                  <>
+                                    <span style={{ background: entry.coat }} /><span style={{ background: entry.sleeve }} /><span style={{ background: entry.scarf }} /><span style={{ background: entry.cap }} />
+                                  </>
+                                ) : (
+                                  <span style={{ background: entry.color ?? 'linear-gradient(120deg, #ffe9b8, #a8e8ff)', width: '100%' }} />
+                                )}
+                              </div>
+                              <strong>{entry.name}</strong>
+                              {equipped ? (
+                                <span className="reward-state equipped">EQUIPPED</span>
+                              ) : unlocked ? (
+                                <button type="button" className="reward-action" onClick={() => { audio.click(); section.apply(entry.name); }}>
+                                  Equip
+                                </button>
+                              ) : purchasable ? (
+                                <button type="button" className="reward-action buy" onClick={() => buyCosmetic(entry)}>
+                                  Buy · {entry.cost} ◆
+                                </button>
+                              ) : (
+                                <span className="reward-state">{requirementText(entry)}</span>
+                              )}
+                            </article>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  );
+                })}
+              </>
+            )}
+
             {menuView === 'settings' && (
               <>
                 <div className="eyebrow"><span className="eyebrow-dot" />MAKE IT YOURS</div>
@@ -937,26 +1309,12 @@ export default function App() {
                   </div>
                 </div>
                 <div className="settings-section preference-rows">
-                  <label className="preference-row">
-                    <span><strong>Bicycle</strong><small>Unlock by riding farther in one run</small></span>
-                    <select className="ride-select" value={preferences.bike} onChange={(event) => updatePreferences({ bike: event.target.value })}>
-                      {BIKES.map((item) => (
-                        <option key={item.name} value={item.name} disabled={lifetime.bestDistance < item.meters}>
-                          {item.name}{lifetime.bestDistance < item.meters ? ` · ${formatNumber(item.meters)} m` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="preference-row">
-                    <span><strong>Character</strong><small>Unlock by landing flips in one run</small></span>
-                    <select className="ride-select" value={preferences.rider} onChange={(event) => updatePreferences({ rider: event.target.value })}>
-                      {RIDERS.map((item) => (
-                        <option key={item.name} value={item.name} disabled={lifetime.bestTricks < item.flips}>
-                          {item.name}{lifetime.bestTricks < item.flips ? ` · ${item.flips} flips` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                  <div className="preference-row">
+                    <span><strong>Rider, bicycle & trail</strong><small>Equip what you've earned or purchased</small></span>
+                    <button type="button" className="reward-link" onClick={() => { audio.click(); setMenuView('rewards'); }}>
+                      {preferences.rider} · {preferences.bike} · {preferences.trail} <span>›</span>
+                    </button>
+                  </div>
                 </div>
                 <div className="settings-links">
                   <button onClick={() => { audio.click(); setMenuView('privacy'); }}>Privacy Policy <span>›</span></button>
@@ -965,7 +1323,7 @@ export default function App() {
                     <button onClick={() => { audio.click(); void ads.showPrivacyOptions(); }}>Ad privacy choices <span>›</span></button>
                   )}
                 </div>
-                <p className="settings-version">Afterglow · Shadows Game Studio · Offline play supported</p>
+                <p className="settings-version">Afterglow v{APP_VERSION} · Shadows Game Studio · Offline play supported</p>
               </>
             )}
 
@@ -1034,6 +1392,9 @@ export default function App() {
               <span><b>{formatNumber(crashResult.coins)}</b> GLOWSTONES</span>
               <span><b>{formatNumber(crashResult.speedKmh)}</b> KM/H</span>
             </div>
+            {crashResult.level && (
+              <p className="crash-level">LEVEL {crashResult.level.number} · {crashResult.level.name.toUpperCase()}</p>
+            )}
             {rewardedReady ? (
               <button className="primary-button revive-button" onClick={watchRewardedRevive} disabled={adBusy}>
                 <span>{adBusy ? 'Opening ad...' : 'Watch Ad & Revive'}</span><span className="button-arrow"><ArrowIcon /></span>
@@ -1042,7 +1403,10 @@ export default function App() {
               <p className="ad-unavailable">{ads.isNative ? 'Preparing a rewarded ad...' : 'Rewarded ads are available in the Android app.'}</p>
             )}
             {adNotice && <p className="ad-notice">{adNotice}</p>}
-            <button className="end-run-button" onClick={endRun} disabled={adBusy}>End Run</button>
+            <div className="crash-secondary">
+              <button className="end-run-button" onClick={restartFromCrash} disabled={adBusy}>Restart Level</button>
+              <button className="end-run-button" onClick={endRun} disabled={adBusy}>End Run</button>
+            </div>
             <span className="revive-rule">Complete a rewarded ad to continue this run</span>
           </div>
         </section>

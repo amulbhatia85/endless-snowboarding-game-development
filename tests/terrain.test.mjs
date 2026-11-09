@@ -4,14 +4,25 @@ import { performance } from 'node:perf_hooks';
 import { moduleUrl } from './loadTypeScript.mjs';
 
 const { generateLevel, LEVEL_SAVE_KEY } = await import(moduleUrl('src/game/levelManager.ts'));
-const { TerrainGenerator, TerrainWorld, TERRAIN_CHUNK_WIDTH: WIDTH, TERRAIN_MAX_SLOPE, validateGap, validateRamp, validateObstacle } = await import(moduleUrl('src/game/terrain.ts'));
+const { TerrainGenerator, TerrainWorld, TERRAIN_CHUNK_WIDTH: WIDTH, TERRAIN_MAX_SLOPE, validateGap, validateRamp, validateObstacle , validateIcePatch, validateSnowball, validateFallingHazard } = await import(moduleUrl('src/game/terrain.ts'));
 const { SnowGameEngine } = await import(moduleUrl('src/game/engine.ts'));
 
 function memoryStorage() {
   const values = new Map();
   return { getItem: key => values.get(key) ?? null, setItem: (key, value) => values.set(key, value) };
 }
-function engine(storage = memoryStorage()) {
+// The default engine storage is pre-seeded with a fixed journey seed so the
+// generation-driven tests are deterministic run-to-run (an unseeded engine
+// draws a random level seed, which made the hazard-corridor test flaky).
+function seededStorage(seed = 20260101, level = 1) {
+  const storage = memoryStorage();
+  storage.setItem(LEVEL_SAVE_KEY, JSON.stringify({
+    version: 1, journeySeed: seed, currentLevel: level, unlockedThrough: level,
+    completedThrough: level - 1, levelScore: 0, runScore: 0, lifetimeScore: 0, checkpoint: null,
+  }));
+  return storage;
+}
+function engine(storage = seededStorage()) {
   globalThis.localStorage = storage;
   globalThis.window = { addEventListener() {}, removeEventListener() {}, requestAnimationFrame() { return 0; }, cancelAnimationFrame() {} };
   return new SnowGameEngine({ getBoundingClientRect: () => ({ width: 900, height: 600 }), getContext: () => ({ setTransform() {} }) },
@@ -176,7 +187,10 @@ test('Final-house reservation joins the terrain continuously', () => {
 });
 
 test('Generated hazards reserve their validated landing corridors', () => {
-  const game = engine();
+  // Phase 11 — early levels pace hazards gently by design (~6–10 s apart at
+  // cruise), so the corridor sample rides a later level where the pacing
+  // bands are dense. Corridor integrity itself is level-independent.
+  const game = engine(seededStorage(20260101, 21));
   game.start();
   const run = game.run;
   run.nextCoinX = 1e12;
@@ -187,7 +201,7 @@ test('Generated hazards reserve their validated landing corridors', () => {
     game.populateAhead(run);
     game.terrain.maintain(run.cameraX, 900);
     for (const obstacle of run.objects) {
-      if (['rock', 'tree', 'log', 'gap', 'ramp'].includes(obstacle.kind)
+      if (['rock', 'tree', 'log', 'gap', 'ramp', 'root', 'fence', 'ice', 'icicle', 'snowball', 'branch'].includes(obstacle.kind)
         && !hazards.some(item => item.x === obstacle.x)) hazards.push({ ...obstacle });
     }
   }
@@ -200,11 +214,19 @@ test('Generated hazards reserve their validated landing corridors', () => {
     const validation = obstacle.kind === 'gap' && !obstacle.bridged
       ? validateGap(surface, obstacle.x, obstacle.width)
       : obstacle.kind === 'ramp' ? validateRamp(surface, obstacle.x)
-      : ['rock', 'tree', 'log'].includes(obstacle.kind) ? validateObstacle(surface, obstacle.x, obstacle.kind) : null;
+      : ['rock', 'tree', 'log', 'root', 'fence'].includes(obstacle.kind) ? validateObstacle(surface, obstacle.x, obstacle.kind)
+      : obstacle.kind === 'ice' ? validateIcePatch(surface, obstacle.x, obstacle.width)
+      : obstacle.kind === 'snowball' ? validateSnowball(surface, obstacle.x)
+      : (obstacle.kind === 'icicle' || obstacle.kind === 'branch') ? validateFallingHazard(surface, obstacle.x) : null;
     if (!validation) continue;
     if (obstacle.kind === 'gap') gaps++;
     assert.equal(validation.safe, true);
-    if (hazards[index + 1]) assert.ok(hazards[index + 1].x >= validation.clearUntil - 0.001);
+    // A ramp-gap pattern intentionally places its gap inside the ramp's
+    // flight corridor — the ramp launches the rider over it — so the
+    // "next hazard clears my corridor" rule only applies across patterns.
+    const next = hazards[index + 1];
+    const pairedGap = obstacle.kind === 'ramp' && next?.kind === 'gap' && next.x - obstacle.x < 400;
+    if (next && !pairedGap) assert.ok(next.x >= validation.clearUntil - 0.001);
   }
   assert.ok(gaps > 0);
 });

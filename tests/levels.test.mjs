@@ -194,6 +194,13 @@ test('Obstacle generation is seeded independently of cosmetics and viewport look
   first.run.nextPowerX = 760;
   first.run.nextBridgeX = 760;
   first.run.powerIndex = 0;
+  // The spawn corridor must be reset too: start()'s lookahead leaves a
+  // width-dependent clear-until behind, which would otherwise shift the
+  // first power-up between viewports and make this test seed-flaky.
+  first.run.hazardClearUntil = 640;
+  // The pacing repetition memory is scheduling state as well — the wider
+  // viewport's initial lookahead may have recorded one pattern more.
+  first.run.recentPatterns = [];
   first.run.rider.x = 0;
   first.populateAhead(first.run);
   const second = engine(save, 500);
@@ -204,10 +211,17 @@ test('Obstacle generation is seeded independently of cosmetics and viewport look
   second.run.nextPowerX = 760;
   second.run.nextBridgeX = 760;
   second.run.powerIndex = 0;
+  second.run.hazardClearUntil = 640;
+  second.run.recentPatterns = [];
   second.run.rider.x = 0;
   second.burst(second.run, 0, 0, 30, '#ffffff', 10, 10);
   second.populateAhead(second.run);
-  const limit = Math.min(first.run.nextHazardX, second.run.nextHazardX) - 245;
+  const limit = Math.min(
+    first.run.nextHazardX,
+    second.run.nextHazardX,
+    first.width * 1.7 + 520, // populateAhead's lookahead per viewport
+    second.width * 1.7 + 520,
+  ) - 245;
   const objects = game => game.run.objects.filter(object => object.x < limit).sort((a, b) => a.x - b.x);
   assert.deepEqual(objects(first), objects(second));
 });

@@ -1,7 +1,7 @@
 import { BICYCLE_PHYSICS, flipProgress } from './riderPhysics';
 import { OBSTACLE_REGISTRY } from './obstacleRegistry';
 export { BICYCLE_PHYSICS } from './riderPhysics';
-import { createLevelRandom, type EnvironmentTheme, type LevelConfiguration } from './levelManager';
+import { createLevelRandom, type EnvironmentTheme, type LevelConfiguration, type TerrainBias } from './levelManager';
 
 export const TERRAIN_CHUNK_WIDTH = 640;
 export const TERRAIN_MAX_SLOPE = 0.34;
@@ -20,15 +20,22 @@ const PROFILES: Record<EnvironmentTheme, { range: number; bump: number; recovery
   'snowy-mountains': { range: 38, bump: 32, recovery: 0.2 },
   'misty-mountains': { range: 33, bump: 28, recovery: 0.24 },
   'moonlit-forest': { range: 25, bump: 22, recovery: 0.28 },
+  jungle: { range: 30, bump: 26, recovery: 0.24 },
 };
+/** Phase 9C — the neutral bias keeps levels 1–4 byte-identical to Phase 8. */
+const NEUTRAL_TERRAIN_BIAS: TerrainBias = { rangeScale: 1, bumpScale: 1, recoveryScale: 1, valleyBias: 0 };
 const clamp = (n: number, low: number, high: number) => Math.max(low, Math.min(high, n));
 const smooth = (t: number) => t * t * t * (t * (t * 6 - 15) + 10);
 
 export class TerrainGenerator {
   private readonly chunks = new Map<number, TerrainChunk>();
   generatedChunks = 0;
+  /** Phase 9C — per-level statistical bias (neutral for levels 1–4). */
+  private readonly bias: TerrainBias;
 
-  constructor(readonly configuration: LevelConfiguration) {}
+  constructor(readonly configuration: LevelConfiguration) {
+    this.bias = configuration.profile?.terrain ?? NEUTRAL_TERRAIN_BIAS;
+  }
 
   get cachedChunks(): number { return this.chunks.size; }
 
@@ -37,12 +44,21 @@ export class TerrainGenerator {
   }
 
   private recovery(index: number): boolean {
-    return index <= 0 || this.random(index, 0x43f12) < PROFILES[this.configuration.environment].recovery;
+    if (index <= 0) return true;
+    const base = PROFILES[this.configuration.environment].recovery * this.bias.recoveryScale;
+    if (this.random(index, 0x43f12) >= clamp(base, 0.08, 0.42)) return false;
+    // Phase 9E — cap flat valleys at five consecutive chunks (~3.2 km) so the
+    // silhouette keeps breathing. Recovery probability itself is untouched;
+    // only statistically excessive streaks are trimmed.
+    for (let back = 1; back <= 5; back += 1) {
+      if (!this.recovery(index - back)) return true;
+    }
+    return false;
   }
 
   private anchor(index: number): number {
     if (index <= 1 || this.recovery(index) || this.recovery(index - 1)) return 0;
-    const range = PROFILES[this.configuration.environment].range * this.configuration.terrain.heightScale;
+    const range = PROFILES[this.configuration.environment].range * this.configuration.terrain.heightScale * this.bias.rangeScale;
     return (this.random(index, 0xabc37) * 2 - 1) * range;
   }
 
@@ -54,13 +70,17 @@ export class TerrainGenerator {
     const delta = endHeight - startHeight;
     const choice = this.random(index, 0x581b);
     const recovery = this.recovery(index);
+    // Phase 9C — the profile's valley bias shifts the valley/rolling/ramp split
+    // while every branch remains reachable.
+    const valleyCut = 0.38 + this.bias.valleyBias;
+    const rampCut = 0.84 - this.bias.valleyBias * 0.5;
     const pattern: TerrainPattern = recovery ? 'recovery'
       : delta > 16 ? 'downhill' : delta < -16 ? 'uphill'
-      : choice < 0.38 ? 'valley' : choice < 0.84 ? 'rolling-hill' : 'ramp';
+      : choice < valleyCut ? 'valley' : choice < rampCut ? 'rolling-hill' : 'ramp';
     // The quintic interpolation has max derivative 1.875; the bump is
     // conservatively bounded by 6. Their combined slope stays below the cap.
     const slopeBudget = Math.max(0, TERRAIN_MAX_SLOPE - Math.abs(delta) * 1.875 / TERRAIN_CHUNK_WIDTH);
-    const desired = PROFILES[this.configuration.environment].bump
+    const desired = PROFILES[this.configuration.environment].bump * this.bias.bumpScale
       * (0.65 + this.configuration.difficulty.progression * 0.35) * (0.65 + choice * 0.35);
     const amplitude = Math.min(desired, slopeBudget * TERRAIN_CHUNK_WIDTH / 6);
     const bump = recovery || pattern === 'uphill' || pattern === 'downhill' ? 0 : amplitude * (pattern === 'valley' ? 1 : -1);
@@ -77,6 +97,37 @@ export class TerrainGenerator {
     const chunk = this.chunk(index);
     const bump = 64 * t ** 3 * (1 - t) ** 3;
     return chunk.startHeight + (chunk.endHeight - chunk.startHeight) * smooth(t) + chunk.bump * bump;
+  }
+
+  /** Phase 5A diagnostics: the chunk index and pattern at a position. */
+  describe(x: number): { index: number; pattern: TerrainPattern } {
+    const index = Math.max(0, Math.floor(x / TERRAIN_CHUNK_WIDTH));
+    return { index, pattern: this.chunk(index).pattern };
+  }
+
+  /**
+   * Phase 5 difficulty input: 0..1 roughness of the terrain across a window.
+   * Recovery chunks are near zero; working chunks blend slope and bump
+   * amplitude against the environment's profile bounds. Deterministic and
+   * viewport-independent (the caller picks a fixed window).
+   */
+  complexity(fromX: number, toX: number): number {
+    const first = Math.max(0, Math.floor(fromX / TERRAIN_CHUNK_WIDTH));
+    const last = Math.max(first, Math.ceil(toX / TERRAIN_CHUNK_WIDTH) - 1);
+    const profile = PROFILES[this.configuration.environment];
+    let total = 0;
+    let count = 0;
+    for (let index = first; index <= last; index += 1) {
+      const chunk = this.chunk(index);
+      if (chunk.pattern === 'recovery') total += 0.05;
+      else {
+        const slope = Math.min(1, Math.abs(chunk.endHeight - chunk.startHeight) / Math.max(1, profile.range));
+        const roughness = Math.min(1, Math.abs(chunk.bump) / Math.max(1, profile.bump));
+        total += 0.3 + 0.35 * slope + 0.35 * roughness;
+      }
+      count += 1;
+    }
+    return count ? total / count : 0;
   }
 
   maintain(left: number, right: number): void {
@@ -109,6 +160,25 @@ export class TerrainWorld {
       if (x >= this.origins[index].x) { origin = this.origins[index]; break; }
     }
     return origin.offset + this.generator(origin).heightAt(x - origin.x);
+  }
+
+  /** Terrain complexity across a window, delegated to the owning generator. */
+  complexity(fromX: number, toX: number): number {
+    let origin = this.origins[0];
+    for (let index = this.origins.length - 1; index >= 0; index -= 1) {
+      if (fromX >= this.origins[index].x) { origin = this.origins[index]; break; }
+    }
+    return this.generator(origin).complexity(fromX - origin.x, toX - origin.x);
+  }
+
+  /** Phase 5A diagnostics: the terrain chunk and pattern under a position. */
+  describe(x: number): { level: number; index: number; pattern: TerrainPattern } | undefined {
+    let origin = this.origins[0];
+    for (let index = this.origins.length - 1; index >= 0; index -= 1) {
+      if (x >= this.origins[index].x) { origin = this.origins[index]; break; }
+    }
+    const chunk = this.generator(origin).describe(x - origin.x);
+    return { level: origin.level, index: chunk.index, pattern: chunk.pattern };
   }
 
   maintain(cameraX: number, width: number): void {
@@ -236,7 +306,73 @@ export function validateGap(heightAt: (x: number) => number, x: number, width: n
   const takeoff = x - 55;
   const approachSlope = Math.abs((heightAt(x) - heightAt(takeoff)) / 55);
   if (approachSlope > 0.18) return { safe: false, clearUntil: x, reason: 'Takeoff slope too steep' };
+  const airborne = validateGapAgainstCrestLaunch(heightAt, x, width);
+  if (!airborne.safe) return airborne;
   return validateLanding(heightAt, takeoff, heightAt(takeoff) - 5, x + width, undefined, options);
+}
+
+/**
+ * Phase 11 — crest-launch guard. `validateLanding` simulates a grounded
+ * takeoff at the lip; it cannot see a rider who crested a hill further back
+ * and is already airborne with no way to jump again. This guard simulates
+ * the two worst-case airborne approaches at top speed — a natural terrain
+ * launch off the highest crest in the approach window, and a hold jump from
+ * that same crest — and rejects the gap when either arc would come down
+ * inside it. Pure validation: rejected placements are retried elsewhere with
+ * the reason recorded, exactly like every other feasibility rule.
+ */
+export function validateGapAgainstCrestLaunch(
+  heightAt: (x: number) => number, x: number, width: number,
+): LandingValidation {
+  const fail = (reason: string): LandingValidation => ({ safe: false, clearUntil: x, reason });
+  // Highest crest in the approach window (beyond one full hold-jump range).
+  const windowStart = x - 780;
+  let crestX = -1;
+  let crestY = -Infinity;
+  for (let sample = windowStart; sample <= x - 60; sample += 20) {
+    const y = heightAt(sample);
+    if (y > crestY) { crestY = y; crestX = sample; }
+  }
+  if (crestX < 0) return { safe: true, clearUntil: x };
+  // Only terrain that falls away behind the crest launches a rider.
+  const dropPastCrest = crestY - heightAt(Math.min(crestX + 90, x - 20));
+  if (dropPastCrest < 26) return { safe: true, clearUntil: x };
+  const slopeAfterCrest = (heightAt(Math.min(crestX + 40, x - 20)) - crestY) / 40;
+  const farEdge = x + width;
+  const nearLipY = heightAt(x);
+  for (const mode of ['coast', 'hold'] as const) {
+    const speed = BICYCLE_PHYSICS.maxSpeed;
+    let px = crestX;
+    let py = crestY - BICYCLE_PHYSICS.groundOffset;
+    let vy = Math.max(0, slopeAfterCrest * speed)
+      - (mode === 'hold'
+        ? BICYCLE_PHYSICS.jumpVelocity + Math.min(BICYCLE_PHYSICS.maxJumpBoost, speed * BICYCLE_PHYSICS.jumpSpeedFactor)
+        : 0);
+    const delta = 1 / 120;
+    let reachedGapAirborne = false;
+    for (let frame = 0; frame < 480; frame += 1) {
+      px += speed * delta;
+      vy += BICYCLE_PHYSICS.gravity * delta;
+      py += vy * delta;
+      if (px >= x) { reachedGapAirborne = true; break; }
+      if (py >= heightAt(px) - BICYCLE_PHYSICS.groundOffset) break; // grounded again: the ground rules apply
+    }
+    if (!reachedGapAirborne) continue;
+    // Airborne across the span: the arc must stay above the near lip and
+    // clear the far lip with a readable margin.
+    while (px < farEdge) {
+      px += speed * delta;
+      vy += BICYCLE_PHYSICS.gravity * delta;
+      py += vy * delta;
+      if (py >= nearLipY - BICYCLE_PHYSICS.groundOffset) {
+        return fail('Crest-launch trajectory descends into the gap');
+      }
+    }
+    if (py > heightAt(farEdge) - BICYCLE_PHYSICS.groundOffset - 20) {
+      return fail('Crest-launch trajectory cannot clear the far lip');
+    }
+  }
+  return { safe: true, clearUntil: x };
 }
 
 export function validateRamp(heightAt: (x: number) => number, x: number, options?: TraversalOptions): LandingValidation {
@@ -251,12 +387,77 @@ export function validateBridge(heightAt: (x: number) => number, x: number, width
 }
 
 export function validateObstacle(
-  heightAt: (x: number) => number, x: number, kind: 'rock' | 'tree' | 'log', options?: TraversalOptions,
+  heightAt: (x: number) => number, x: number, kind: 'rock' | 'tree' | 'log' | 'root' | 'fence', options?: TraversalOptions,
 ): LandingValidation {
   const { radius, height } = OBSTACLE_REGISTRY[kind].collision!;
-  const takeoff = x - (kind === 'tree' ? 100 : 65);
+  // Takeoff distances leave the near corridor edge deep enough into the
+  // flight for the slower-rising shortened arc to have reached the required
+  // clearance at maximum speed with a late (+margin) tap, on top of the
+  // takeoff jitter — while the landing pad stays inside the minimum-speed
+  // reach (226 px).
+  const takeoff = x - (kind === 'tree' ? 132 : kind === 'fence' ? 85 : kind === 'root' ? 58 : kind === 'log' ? 80 : 70);
   return validateLanding(heightAt, takeoff, heightAt(takeoff) - 5, x + radius,
     { x, radius, height }, options);
+}
+
+/**
+ * Ground-level environmental patches (ice): the rider crosses on the ground, so
+ * no jump is simulated. The patch demands gentle, step-free terrain so the
+ * reduced-traction physics stays controllable at every point of the crossing.
+ */
+export function validateIcePatch(
+  heightAt: (x: number) => number, x: number, width: number,
+): LandingValidation {
+  if (!Number.isFinite(width) || width < 90 || width > 280) {
+    return { safe: false, clearUntil: x, reason: 'Ice patch width outside validated limits' };
+  }
+  for (let sample = x; sample <= x + width; sample += 35) {
+    const slope = Math.abs((heightAt(Math.min(sample + 35, x + width)) - heightAt(sample)) / 35);
+    if (slope > 0.16) return { safe: false, clearUntil: x, reason: 'Ice patch terrain too steep for reduced traction' };
+  }
+  if (Math.abs(heightAt(x + width) - heightAt(x)) / width > 0.1) {
+    return { safe: false, clearUntil: x, reason: 'Ice patch drifts across elevation bands' };
+  }
+  return {
+    safe: true,
+    clearUntil: x + width + 100,
+    takeoff: { start: x - 30, end: x },
+    landing: { start: x + width, end: x + width + 70 },
+  };
+}
+
+/**
+ * Overhead falling hazards (icicles, branches): the rider passes underneath on
+ * the ground. Validation only demands a readable, rideable corridor through the
+ * fall zone — no forced jumps, no steep steps while the player watches the cycle.
+ */
+export function validateFallingHazard(
+  heightAt: (x: number) => number, x: number,
+): LandingValidation {
+  for (let sample = x - 90; sample <= x + 90; sample += 30) {
+    const slope = Math.abs((heightAt(sample + 30) - heightAt(sample)) / 30);
+    if (slope > 0.2) return { safe: false, clearUntil: x, reason: 'Falling-hazard corridor too steep to read' };
+  }
+  return {
+    safe: true,
+    clearUntil: x + 90,
+    takeoff: { start: x - 60, end: x - 20 },
+    landing: { start: x + 30, end: x + 80 },
+  };
+}
+
+/**
+ * Rolling ground hazards (snowballs): like the swinging log, the validation
+ * covers the full patrol corridor — one jump clears the ball wherever it is.
+ */
+export function validateSnowball(
+  heightAt: (x: number) => number, x: number, options?: TraversalOptions,
+): LandingValidation {
+  // Patrol sweep 28 + downhill bias 8 + ball radius 17 = 53px corridor —
+  // clearable in one jump at minimum speed wherever the patrol has carried
+  // the ball (retuned for the shorter Phase 11 jump reach: takeoff x-120).
+  return validateLanding(heightAt, x - 120, heightAt(x - 120) - 5, x + 53,
+    { x, radius: 53, height: 30 }, options);
 }
 
 export function validateRampGap(
@@ -275,6 +476,13 @@ export function validateSwingingLog(
   heightAt: (x: number) => number, x: number, options?: TraversalOptions,
 ): LandingValidation {
   // Covers every swing phase, rotation, and local ground-height difference.
-  return validateLanding(heightAt, x - 160, heightAt(x - 160) - 5, x + 58,
-    { x, radius: 58, height: 90 }, options);
+  // Swing 14 + log half-length 30 = 44px corridor; clearance height 50
+  // (validator requires rider >= 54px above ground) covers the log hung at
+  // ground-24±6 with a 34px collision box (top at ground-47) plus the
+  // rider's bottom and inset. Takeoff x-128 keeps the whole corridor inside
+  // the >=54px-clearance span of the shortened jump at BOTH speed extremes
+  // and on sloped ground, with the 24px recovery pad inside the
+  // minimum-speed reach (226px).
+  return validateLanding(heightAt, x - 128, heightAt(x - 128) - 5, x + 44,
+    { x, radius: 44, height: 50 }, options);
 }

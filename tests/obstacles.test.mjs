@@ -6,7 +6,7 @@ import { moduleUrl } from './loadTypeScript.mjs';
 const { generateLevel } = await import(moduleUrl('src/game/levelManager.ts'));
 const { OBSTACLE_REGISTRY, obstacleReady, swingingLogPose } = await import(moduleUrl('src/game/obstacleRegistry.ts'));
 const { ObstaclePlanner, patternAvailability, validPlacementMetadata } = await import(moduleUrl('src/game/obstaclePlanner.ts'));
-const { TerrainGenerator, validateRampGap, validateGap, validateRamp, validateObstacle, validateSwingingLog } = await import(moduleUrl('src/game/terrain.ts'));
+const { TerrainGenerator, validateRampGap, validateGap, validateRamp, validateObstacle, validateSwingingLog, validateIcePatch, validateSnowball, validateFallingHazard } = await import(moduleUrl('src/game/terrain.ts'));
 const { SnowGameEngine } = await import(moduleUrl('src/game/engine.ts'));
 
 function context(level = 1, seed = 42, surface = () => 360) {
@@ -41,10 +41,11 @@ function plans(level, count = 55, seed = 42, surface = () => 360) {
 }
 
 test('Registry activates only complete implementations and filters unavailable theme assets', () => {
-  for (const id of ['root', 'fence', 'cliff', 'broken-bridge', 'ice', 'icicle', 'snowball', 'moving-platform', 'branch']) {
-    assert.equal(obstacleReady(id), false);
+  // Phase 9A: the full expanded library is implemented and active.
+  for (const id of ['rock', 'log', 'tree', 'root', 'fence', 'cliff', 'broken-bridge', 'ice', 'icicle', 'snowball', 'swinging-log', 'moving-platform', 'branch']) {
+    assert.equal(obstacleReady(id), true);
   }
-  assert.equal(obstacleReady('swinging-log'), true);
+  assert.equal(obstacleReady('root'), true);
   assert.ok(!patternAvailability(generateLevel(1, 42)).find(pattern => pattern.id === 'double-logs').available);
   for (const level of [1, 2, 3, 4, 8, 30]) {
     const allowed = generateLevel(level, 42).allowedObstacles;
@@ -120,13 +121,21 @@ test('Generated sequences retain feasible tap and held-flip traversal across the
         const validation = obstacle.kind === 'gap' ? validateGap(surface, obstacle.x, obstacle.width, options)
           : obstacle.kind === 'ramp' ? validateRamp(surface, obstacle.x, options)
           : obstacle.kind === 'swinging-log' ? validateSwingingLog(surface, obstacle.x, options)
+          : obstacle.kind === 'ice' ? validateIcePatch(surface, obstacle.x, obstacle.width)
+          : obstacle.kind === 'snowball' ? validateSnowball(surface, obstacle.x, options)
+          : (obstacle.kind === 'icicle' || obstacle.kind === 'branch') ? validateFallingHazard(surface, obstacle.x)
           : validateObstacle(surface, obstacle.x, obstacle.kind, options);
         assert.equal(validation.safe, true, plan.patternId);
         validated++;
       }
       for (let index = 0; index < plan.obstacles.length; index++) {
         const metadata = plan.obstacles[index].plan;
-        assert.ok(metadata.warningStart <= metadata.takeoff.start - 450);
+        // Phase 11 — the warning corridor is speed-projected (max(300,
+        // projectedSpeed) × reactionSeconds), so it buys a constant ~1.05s+
+        // of reaction at any approach speed instead of a fixed 450px that
+        // only meant that at sprint speed. At this harness's 250px/s ride the
+        // 300px floor still guarantees ~1.2s of warning.
+        assert.ok(metadata.warningStart <= metadata.takeoff.start - 300);
       }
     }
   }
@@ -195,8 +204,9 @@ test('Swinging logs warn and remain clearable at different swing phases', () => 
     const x = 1500;
     run.objects = [{ kind: 'swinging-log', x, phase }];
     run.nextCoinX = run.nextHazardX = 1e12;
-    Object.assign(run.rider, { x: x - 160, y: 355, grounded: true, rotation: 0, speed });
-    run.distance = x - 160;
+    // Take off from the position validateSwingingLog itself guarantees.
+    Object.assign(run.rider, { x: x - 128, y: 355, grounded: true, rotation: 0, speed });
+    run.distance = x - 128;
     game.levels.progress.runScore = Math.floor(run.distance / 10);
     game.press();
     if (!held) game.release();

@@ -9,7 +9,17 @@
     "preview": "vite preview",
     "test:levels": "node tests/levels.test.mjs",
     "test:terrain": "node tests/terrain.test.mjs",
-    "test:obstacles": "node tests/obstacles.test.mjs"
+    "test:obstacles": "node tests/obstacles.test.mjs",
+    "test:environment": "node tests/environment.test.mjs",
+    "test:atmosphere": "node --test tests/atmosphere.test.mjs",
+    "test:infinite": "node --test tests/infinite.test.mjs",
+    "test:difficulty": "node --test tests/difficulty.test.mjs",
+    "test:audit": "node --test tests/audit.test.mjs",
+    "test:transition": "node --test tests/transition.test.mjs",
+    "test:rewards": "node --test tests/rewards.test.mjs",
+    "test:recovery": "node --test tests/recovery.test.mjs",
+    "test:library": "node --test tests/library.test.mjs",
+    "test:events": "node --test tests/events.test.mjs"
   },
   "dependencies": {
     "@capacitor-community/admob": "^8.3.0",
@@ -17,14 +27,13 @@
     "@capacitor/app": "^8.1.2",
     "@capacitor/core": "^8.6.0",
     "@capacitor/haptics": "^8.0.2",
-    "clsx": "2.1.1",
+    "@capacitor/ios": "^8.6.0",
     "react": "19.2.6",
-    "react-dom": "19.2.6",
-    "tailwind-merge": "3.4.0"
+    "react-dom": "19.2.6"
   },
   "devDependencies": {
     "@capacitor/assets": "^4.0.0",
-    "@capacitor/cli": "^7.6.10",
+    "@capacitor/cli": "^8.6.0",
     "@tailwindcss/vite": "4.1.17",
     "@types/node": "22.19.17",
     "@types/react": "19.2.7",
