@@ -540,3 +540,22 @@ Feedback from the first iPhone test, fixed once in the shared code base
 
 Cloud builds for Android/iOS were switched to manual dispatch — the web
 build is the test surface until the playtest is signed off.
+
+---
+
+# Revive Screen — One-Line Button Row (playtest feedback)
+
+The revive offer used to be an oversized standalone gold button floating
+above the two secondary buttons. All three actions now share a single
+row, left to right: **Watch Ad & Revive · Restart Level · End Run**.
+
+- The revive button keeps its gold primary colour but is sized to match
+  its neighbours (44 px tall, same padding rhythm; was min-width 290 px
+  and 54 px tall).
+- The crash panel widened slightly (480 → 560 px) so the three buttons
+  fit on one line down to small-phone landscape widths.
+- Verified with the real built stylesheet + exact markup at 844×390 and
+  568×320: all three buttons on one line, equal heights, gold preserved
+  (screenshots in `qa/phase11-revive-row/`). The web build (where the
+  revive offer is absent — rewarded ads are native-only) renders the
+  two-button row on one line in the real app.

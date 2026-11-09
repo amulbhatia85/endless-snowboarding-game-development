@@ -1395,15 +1395,18 @@ export default function App() {
             {crashResult.level && (
               <p className="crash-level">LEVEL {crashResult.level.number} · {crashResult.level.name.toUpperCase()}</p>
             )}
-            {rewardedReady ? (
-              <button className="primary-button revive-button" onClick={watchRewardedRevive} disabled={adBusy}>
-                <span>{adBusy ? 'Opening ad...' : 'Watch Ad & Revive'}</span><span className="button-arrow"><ArrowIcon /></span>
-              </button>
-            ) : (
+            {adNotice && <p className="ad-notice">{adNotice}</p>}
+            {!rewardedReady && (
               <p className="ad-unavailable">{ads.isNative ? 'Preparing a rewarded ad...' : 'Rewarded ads are available in the Android app.'}</p>
             )}
-            {adNotice && <p className="ad-notice">{adNotice}</p>}
+            {/* Playtest fix — the revive offer joins the same one-line row as
+                Restart Level and End Run, sized to match them. */}
             <div className="crash-secondary">
+              {rewardedReady && (
+                <button className="primary-button revive-button" onClick={watchRewardedRevive} disabled={adBusy}>
+                  <span>{adBusy ? 'Opening ad...' : 'Watch Ad & Revive'}</span><span className="button-arrow"><ArrowIcon /></span>
+                </button>
+              )}
               <button className="end-run-button" onClick={restartFromCrash} disabled={adBusy}>Restart Level</button>
               <button className="end-run-button" onClick={endRun} disabled={adBusy}>End Run</button>
             </div>

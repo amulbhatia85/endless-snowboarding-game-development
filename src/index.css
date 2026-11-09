@@ -1442,10 +1442,20 @@ kbd {
 
 /* ───────── Crash / revive and pause ───────── */
 .crash-overlay { background: rgba(8, 19, 30, 0.34); }
-.crash-content { width: min(480px, 100%); }
+.crash-content { width: min(560px, 100%); }
 .crash-stats { display: flex; justify-content: center; flex-wrap: wrap; gap: 12px 22px; margin: 22px 0 24px; color: rgba(245, 242, 233, 0.52); font-size: 8px; font-weight: 700; letter-spacing: 0.14em; }
 .crash-stats b { color: #f5f2e9; font-size: 13px; }
-.revive-button { min-width: min(100%, 290px); }
+/* Playtest fix — the revive offer used to be an oversized standalone button
+   floating above the row. It now sits in the same one-line row as Restart
+   Level and End Run, sized to match them; its gold primary colour stays. */
+.revive-button {
+  min-height: 44px;
+  min-width: 132px;
+  margin: 0;
+  padding: 0 13px;
+  gap: 8px;
+  justify-content: center;
+}
 .revive-button:disabled, .result-actions button:disabled { opacity: 0.55; cursor: wait; transform: none; }
 .ad-unavailable, .ad-notice { max-width: 340px; margin: 0 auto; color: rgba(245, 242, 233, 0.58); font-size: 11px; line-height: 1.55; }
 .ad-notice { margin-top: 13px; color: #f0c896; }
@@ -1882,10 +1892,12 @@ kbd {
 .crash-secondary {
   display: flex;
   gap: 10px;
+  align-items: stretch;
   justify-content: center;
   flex-wrap: wrap;
 }
-.crash-secondary .end-run-button { margin-top: 0; }
+.crash-secondary .end-run-button,
+.crash-secondary .revive-button { margin-top: 0; }
 
 /* Phase 9A — developer obstacle preview selector (dev bar, ?dev=1 only). */
 .dev-obstacle-select {
