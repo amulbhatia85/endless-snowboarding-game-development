@@ -6,19 +6,6 @@ name: Build Android APK
 # Android project or the build config.
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - arena/62ca48ad-endless-snowboarding-game-deve
-    paths:
-      - .github/workflows/build-android.yml
-      - src/**
-      - android/**
-      - capacitor.config.json
-      - package.json
-      - package-lock.json
-
-permissions:
-  contents: write
 
 jobs:
   apk:

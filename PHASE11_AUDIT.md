@@ -512,3 +512,31 @@ fine — the deserializer ignores unknown fields and nothing reads them.
   was previously on screen for ~15 s) — zero dark interior columns
   detected in ~40 000 sampled frames, zero console errors. Ride
   screenshots: `qa/phase11-tunnel-removal/`.
+
+---
+
+# Playtest Fixes — Round 2 (iPhone feedback, applied to all platforms)
+
+Feedback from the first iPhone test, fixed once in the shared code base
+(web, Android and iOS all render the same UI):
+
+1. **Coins were nearly invisible.** The old coin was a 2.2 px light-gold
+   outline ring that melted into snow and pale skies. It is now a solid
+   disc — dark bronze rim (`#7c4c14`), gold body (`#f6b23a`), pale gold
+   centre, white specular arc, and a slightly stronger warm halo — which
+   reads on light ground *and* in dark environments. The HUD coin-counter
+   glyph matches. Verified in the rendered build: solid-gold pixel runs
+   of ~15 px where the old ring produced 2–4.
+2. **The distance-milestone capsule floated over the rider.** The toast
+   moved from screen centre (top 168 px, `left 50 %`) to the top-right
+   corner and shrank (~40 % smaller: 162×39 on an iPhone-landscape
+   viewport). Verified by DOM rect: x 668, y 12 — nowhere near the rider
+   zone.
+3. **Text clutter across the mid-screen band.** The run HUD was
+   reorganised so nothing occupies the rider's lane: mission pill →
+   bottom-right, combo badge → bottom-left, control hint → bottom-centre,
+   live distance → slimmer top-centre readout. Measured rects confirm
+   the mid-screen band is clear on an 844×390 landscape viewport.
+
+Cloud builds for Android/iOS were switched to manual dispatch — the web
+build is the test surface until the playtest is signed off.

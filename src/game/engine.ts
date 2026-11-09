@@ -3067,8 +3067,8 @@ export class SnowGameEngine {
           // by one context is never handed to another.
           if (this.coinHaloFor !== context) {
             const halo = context.createRadialGradient(0, 0, 1, 0, 0, 22);
-            halo.addColorStop(0, 'rgba(255,221,154,0.33)');
-            halo.addColorStop(1, 'rgba(255,221,154,0)');
+            halo.addColorStop(0, 'rgba(255,196,96,0.42)');
+            halo.addColorStop(1, 'rgba(255,196,96,0)');
             this.coinHalo = halo;
             this.coinHaloFor = context;
           }
@@ -3077,15 +3077,26 @@ export class SnowGameEngine {
           context.arc(0, 0, 22, 0, TAU);
           context.fill();
         }
-        context.strokeStyle = '#ffda91';
-        context.lineWidth = 2.2;
+        // Playtest fix — the old light-gold outline ring vanished against
+        // snow and pale skies. The coin is now a solid disc: a dark bronze
+        // rim reads on light ground, the bright gold body reads in dark
+        // environments, and the pair stays visible through every palette.
+        context.fillStyle = '#7c4c14';
         context.beginPath();
-        context.arc(0, 0, 8.5, 0, TAU);
-        context.stroke();
-        context.strokeStyle = 'rgba(255,255,255,0.86)';
-        context.lineWidth = 1;
+        context.arc(0, 0, 10, 0, TAU);
+        context.fill();
+        context.fillStyle = '#f6b23a';
         context.beginPath();
-        context.arc(0, 0, 4.2, -1.1, 1.1);
+        context.arc(0, 0, 8.1, 0, TAU);
+        context.fill();
+        context.fillStyle = '#ffe6a3';
+        context.beginPath();
+        context.arc(0, 0, 4.6, 0, TAU);
+        context.fill();
+        context.strokeStyle = 'rgba(255,255,255,0.92)';
+        context.lineWidth = 1.4;
+        context.beginPath();
+        context.arc(0, 0, 6.3, -1.15, 1.15);
         context.stroke();
         context.restore();
         continue;

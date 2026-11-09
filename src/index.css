@@ -224,9 +224,10 @@ button:focus-visible {
 .coin-glyph {
   width: 9px;
   height: 9px;
-  border: 1px solid #f4d494;
+  border: 1.5px solid #7c4c14;
   border-radius: 50%;
-  box-shadow: 0 0 9px rgba(255, 218, 145, 0.62);
+  background: radial-gradient(circle at 38% 34%, #ffe6a3 0 38%, #f6b23a 62%);
+  box-shadow: 0 0 9px rgba(255, 196, 96, 0.62);
 }
 
 .combo-indicator {
@@ -1099,15 +1100,18 @@ kbd {
 .sound-hint kbd { min-height: 16px; font-size: 7px; }
 
 /* ───────── Achievement toast ───────── */
+/* Playtest fix — the toast used to float at screen centre, right over the
+   rider. It now lives in the top-right corner (the rider rides at ~28 %
+   from the left) and is deliberately compact. */
 .achievement-toast {
   position: absolute;
   z-index: 6;
-  top: 168px;
-  left: 50%;
+  top: max(12px, calc(env(safe-area-inset-top) + 8px));
+  right: max(14px, env(safe-area-inset-right));
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 18px 10px 12px;
+  gap: 8px;
+  padding: 5px 11px 5px 6px;
   border: 1px solid rgba(240, 200, 150, 0.35);
   border-radius: 99px;
   background: rgba(13, 28, 43, 0.55);
@@ -1115,34 +1119,35 @@ kbd {
   -webkit-backdrop-filter: blur(10px);
   color: #f6f1e5;
   pointer-events: none;
-  transform: translateX(-50%);
   animation: toastLife 2.6s cubic-bezier(0.2, 0.72, 0.26, 1) both;
 }
 .toast-star {
   display: grid;
-  width: 26px;
-  height: 26px;
+  width: 18px;
+  height: 18px;
   place-items: center;
   border-radius: 50%;
   background: #f0c896;
   color: #23384a;
-  font-size: 12px;
-  box-shadow: 0 0 18px rgba(240, 200, 150, 0.6);
+  font-size: 9px;
+  box-shadow: 0 0 14px rgba(240, 200, 150, 0.6);
 }
-.achievement-toast div { display: grid; gap: 2px; }
-.toast-label { color: #f0c896; font-size: 7px; font-weight: 700; letter-spacing: 0.18em; }
-.achievement-toast strong { font-size: 13px; font-weight: 560; letter-spacing: 0.01em; }
+.achievement-toast div { display: grid; gap: 1px; }
+.toast-label { color: #f0c896; font-size: 6px; font-weight: 700; letter-spacing: 0.16em; }
+.achievement-toast strong { font-size: 11px; font-weight: 560; letter-spacing: 0.01em; }
 
 @keyframes toastLife {
-  0% { opacity: 0; transform: translate(-50%, -8px) scale(0.96); }
-  10% { opacity: 1; transform: translate(-50%, 0) scale(1); }
-  85% { opacity: 1; transform: translate(-50%, 0); }
-  100% { opacity: 0; transform: translate(-50%, -6px); }
+  0% { opacity: 0; transform: translateY(-8px) scale(0.96); }
+  10% { opacity: 1; transform: translateY(0) scale(1); }
+  85% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(-6px); }
 }
 
 @media (max-width: 680px) {
   .sound-panel { width: 228px; right: -4px; }
-  .achievement-toast { top: 140px; }
+  .achievement-toast { padding: 4px 9px 4px 5px; gap: 6px; }
+  .toast-star { width: 15px; height: 15px; font-size: 8px; }
+  .achievement-toast strong { font-size: 10px; }
 }
 
 /* ───────── Shadows Game Studio splash ───────── */
@@ -1563,10 +1568,26 @@ kbd {
 .game-app .hud-readouts :is(.hud-score, .hud-stat) { gap: 3px; }
 .game-app .hud-readouts .hud-label { font-size: 6px; letter-spacing: 0.1em; }
 .game-app .hud-readouts .hud-rule { display: none; }
+/* Playtest fix — the run HUD (mission pill, combo, power badges) used to
+   hang around screen centre where the rider rides. The whole hud box now
+   anchors to the bottom-left corner; the control hint moves to the bottom
+   centre so the mid-screen band stays clear for gameplay. */
+.game-app .hud {
+  top: auto;
+  left: max(16px, env(safe-area-inset-left));
+  bottom: max(16px, calc(env(safe-area-inset-bottom) + 10px));
+  transform: none;
+}
 .game-app .run-mission { right: 0; bottom: 0; left: auto; transform: none; }
 .game-app .power-indicators { top: auto; bottom: calc(100% + 6px); left: 0; transform: none; }
 .game-app .combo-indicator { top: auto; bottom: calc(100% + 33px); left: 0; transform: none; animation: none; }
-.game-app .play-hint { top: max(70px, calc(env(safe-area-inset-top) + 60px)); bottom: auto; pointer-events: none; }
+.game-app .play-hint {
+  top: auto;
+  bottom: max(56px, calc(env(safe-area-inset-bottom) + 50px));
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
 
 @media (max-width: 540px) {
   .game-app .run-mission { bottom: calc(100% + 34px); }
@@ -1605,19 +1626,19 @@ kbd {
 .live-distance {
   position: absolute;
   z-index: 3;
-  top: max(80px, calc(env(safe-area-inset-top) + 68px));
+  top: max(70px, calc(env(safe-area-inset-top) + 58px));
   left: 50%;
   transform: translateX(-50%);
   display: grid;
-  gap: 4px;
+  gap: 2px;
   text-align: center;
   color: #fff1d5;
   text-shadow: 0 1px 7px #142839;
   pointer-events: none;
 }
-.live-distance > span:first-child { font-size: 7px; font-weight: 400; letter-spacing: 0.16em; }
-.live-distance .distance-value { font-size: 20px; font-weight: 400; font-variant-numeric: tabular-nums; }
-.live-distance small { font-size: 11px; font-weight: 400; }
+.live-distance > span:first-child { font-size: 6px; font-weight: 400; letter-spacing: 0.14em; }
+.live-distance .distance-value { font-size: 15px; font-weight: 400; font-variant-numeric: tabular-nums; }
+.live-distance small { font-size: 8px; font-weight: 400; }
 
 @keyframes statDrift {
   0% { opacity: 0; transform: translateY(12px); }
