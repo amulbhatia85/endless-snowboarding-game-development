@@ -12,7 +12,7 @@ on:
   # NOT trigger it until the playtest flow is signed off).
   push:
     branches:
-      - arena/14aaea8f-endless-snowboarding-game-deve
+      - arena/d938b11b-endless-snowboarding-game-deve
     paths:
       - .github/workflows/build-ios.yml
 

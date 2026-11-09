@@ -1104,7 +1104,7 @@ export class SnowGameEngine {
       }
     }
 
-    const terrainCamera = this.run && this.status !== 'menu' ? this.run.cameraX : this.clock * 16 - this.width * 0.72;
+    const terrainCamera = this.run && this.status !== 'menu' ? this.run.cameraX : this.clock * 16 - this.width * 0.30;
     if (this.run?.terrainOrigins && this.run.terrainOrigins.length > 2) {
       const origins = this.run.terrainOrigins;
       while (origins.length > 2 && origins[1].x < terrainCamera - this.width * 2 - 640) origins.shift();
@@ -1283,6 +1283,50 @@ export class SnowGameEngine {
   private baseTerrainAt(x: number): number {
     this.terrain ??= this.createTerrain([{ level: this.levels.current.number, x: 0, offset: 0 }]);
     return this.height * 0.605 + this.terrain.heightAt(x);
+  }
+
+  /**
+   * Attract (menu) display surface — a *rendering* line only; gameplay,
+   * saves, checkpoints and the parked-run restore all keep sampling
+   * terrainAt's gameplay line. The main menu leaves an open band (on portrait
+   * phones between the title block and the nav stack; in landscape below the
+   * tagline and left of the nav column) and the idle rider must coast inside
+   * it rather than behind the buttons.
+   *
+   * The shell measures that band in real CSS pixels (setAttractBand) so the
+   * placement is exact on every device; the aspect-blended fraction below is
+   * the fallback for engine-only contexts (tests, previews) where no DOM
+   * exists. The terrain undulation is damped — to the band's own headroom
+   * when a band is known — so the crest cannot wander into the UI.
+   */
+  private attractBand: { top: number; bottom: number } | null = null;
+
+  setAttractBand(top: number, bottom: number): void {
+    if (!Number.isFinite(top) || !Number.isFinite(bottom)) return;
+    const upper = Math.max(0, Math.min(top, this.height - 8));
+    const lower = Math.min(this.height, Math.max(upper + 8, bottom));
+    this.attractBand = { top: upper, bottom: lower };
+  }
+
+  private attractSurface(x: number): number {
+    this.terrain ??= this.createTerrain([{ level: this.levels.current.number, x: 0, offset: 0 }]);
+    let baseY: number;
+    let noise: number;
+    if (this.attractBand) {
+      // Rider sprite: ~28px above its anchor, ~3px below.
+      const lo = this.attractBand.top + 28;
+      const hi = this.attractBand.bottom - 3;
+      const anchor = lo <= hi ? (lo + hi) / 2 : hi;
+      const room = lo <= hi ? Math.min(anchor - lo, hi - anchor) : 0;
+      noise = Math.min(0.12, room / 70);
+      baseY = anchor + 5;
+    } else {
+      const aspect = this.width / Math.max(1, this.height);
+      const t = clamp((aspect - 0.75) / 0.55, 0, 1);
+      baseY = this.height * lerp(0.455, 0.79, t);
+      noise = 0.12;
+    }
+    return baseY + this.terrain.heightAt(x) * noise;
   }
 
   private terrainAngle(x: number): number {
@@ -2362,7 +2406,7 @@ export class SnowGameEngine {
     const run = this.run;
     const isMenu = this.status === 'menu' || !run;
     const menuX = this.clock * 16;
-    const cameraX = isMenu ? menuX - width * 0.72 : run.cameraX;
+    const cameraX = isMenu ? menuX - width * 0.30 : run.cameraX;
     const worldX = isMenu ? menuX : run.rider.x;
     const cycle = this.currentDayPhase();
     const palette = this.environment.palette(cycle);
@@ -2379,12 +2423,15 @@ export class SnowGameEngine {
     view.riderX = worldX;
     view.isMenu = isMenu;
     view.lighter = this.lighterGraphics;
+    // The menu rides the attract surface (UI-aware horizon, damped noise);
+    // every gameplay frame samples the real collision line.
+    view.groundAt = isMenu ? (x: number) => this.attractSurface(x) : (x: number) => this.terrainAt(x);
 
     context.clearRect(0, 0, width, height);
     this.environment.drawSky(context, view, palette);
 
     const rider = isMenu
-      ? { x: menuX, y: this.terrainAt(menuX) - 5, rotation: this.terrainAngle(menuX), grounded: true }
+      ? { x: menuX, y: this.attractSurface(menuX) - 5, rotation: this.terrainAngle(menuX), grounded: true }
       : run.rider;
     const shakeX = run && (this.status === 'playing' || this.status === 'gameover' || this.status === 'crashed')
       ? Math.sin(this.clock * 78) * run.shake
@@ -2398,7 +2445,7 @@ export class SnowGameEngine {
       this.drawStartWindmill(context, cameraX, run.elapsed);
       for (const house of run.houses) this.drawFinishHouse(context, house, cameraX, run);
     }
-    this.drawTerrain(context, width, height, cameraX, palette, run);
+    this.drawTerrain(context, width, height, cameraX, palette, run, view.groundAt);
     // Phase 9B — environment-specific crest detail rides the collision surface.
     this.environment.drawGroundDetail(context, view, palette);
     this.environment.drawDecorations(context, view, this.decorationReserved, palette);
@@ -2946,6 +2993,7 @@ export class SnowGameEngine {
     cameraX: number,
     palette: Palette,
     run: RunState | null,
+    surface: (x: number) => number,
   ): void {
     const step = this.lighterGraphics ? 12 : 9;
     const segment = this.terrainSegment;
@@ -3007,7 +3055,7 @@ export class SnowGameEngine {
       if (inGap) {
         fill();
       } else {
-        push(screenX, this.terrainAt(worldX));
+        push(screenX, surface(worldX));
       }
     }
     fill();
@@ -3018,8 +3066,8 @@ export class SnowGameEngine {
         const startX = gap.x - cameraX;
         const endX = startX + (gap.width ?? 0);
         if (endX < -30 || startX > width + 30) continue;
-        const leftY = this.terrainAt(gap.x);
-        const rightY = this.terrainAt(gap.x + (gap.width ?? 0));
+        const leftY = surface(gap.x);
+        const rightY = surface(gap.x + (gap.width ?? 0));
         const gorge = context.createLinearGradient(0, Math.min(leftY, rightY), 0, height);
         gorge.addColorStop(0, 'rgba(35,54,74,0.84)');
         gorge.addColorStop(1, 'rgba(13,30,47,0.96)');

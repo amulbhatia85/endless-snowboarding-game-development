@@ -831,3 +831,52 @@ identity untouched.
 - Suite 246/246, tsc clean, vite build 2.1s.
 - Headless QA only — real-device checks (Dynamic Island, safe areas,
   scroll feel, sound) remain for the player's iPhone.
+
+## Refinement follow-up — idle rider visible on the main menu
+
+The player reported the menu's idle rider rendering behind the menu UI. Root
+cause: the attract scene drew the rider at 72% of the width on the gameplay
+ground line (60.5% of height) — inside the nav stack on every phone layout.
+
+### Fix — the shell measures the corridor, the engine rides it
+- `App.tsx` measures the menu's open band in the rider's column (30% of the
+  width): the largest vertical gap between the visible blocks (topbar,
+  intro-copy children, nav, mini-row), re-measured on menu entry, after fonts
+  settle, and on resize. It hands the band to `engine.setAttractBand(top,
+  bottom)`.
+- The engine's attract scene (`attractSurface`) is a **display line only**:
+  the rider is anchored at the band's centre (biased for the ~28px sprite
+  above / 3px below), and the terrain undulation is damped to the band's own
+  headroom (max 0.12x the ±70px envelope). Gameplay, saves, checkpoints and
+  parked-run restore keep sampling `terrainAt`'s gameplay line — an earlier
+  flag-based attempt broke parked-run restore (caught by the suite: recovery
+  tests sample terrain in menu status) and was replaced by this draw-path
+  surface before commit.
+- Camera: the menu rider sits at 30% of the width (was 72%), clear of the
+  nav column in every side-by-side layout.
+- Fallback for engine-only contexts (no DOM): aspect-blended fraction
+  (0.455 portrait → 0.79 landscape), same damped noise.
+- CSS: small phones in landscape (≤740px wide, ≤480px tall) get a 44px
+  copy↔nav gap and the studio signature line yields its space (the topbar
+  keeps the brand) so the corridor is wide enough; the column's auto margins
+  absorb the difference, so nothing clips.
+
+### Verification
+- Unit (`tests/menuscene.test.mjs`, 4 tests): the drawn rider anchor (from
+  the recorded draw stream) sits inside the measured CSS bands at
+  390×844 / 844×390 / 1280×800; `terrainAt` stays on the gameplay line in
+  menu status; fresh runs spawn on the gameplay ground; parked runs survive
+  resize-in-menu; `setAttractBand` centres the rider and damps noise to the
+  band headroom, degrading gracefully in a too-narrow corridor.
+- Browser (real rendered game, pixel-scan of the live canvas — the rider's
+  persistent dark silhouette vs the DOM-measured band): INSIDE on all nine
+  sizes — 390×844, 844×390, 375×667, 667×375, 414×896, 896×414, 768×1024,
+  1024×768, 1280×800 — with zero console errors; nav still fits everywhere
+  (small-landscape menus were already scrollable before this change).
+- Screenshots in `qa/menu-rider/`; pixel-scan data in `pixels.json`.
+- Suite 250/250 (246 prior + 4 new), tsc clean.
+
+### Build artifacts (this round)
+Both workflows re-armed for the active branch and dispatched: Android
+commits `Afterglow.apk` back to the branch; iOS produces the unsigned
+device IPA + simulator app as Actions artifacts (`Afterglow-iOS-packages`).

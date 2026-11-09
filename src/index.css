@@ -1376,6 +1376,8 @@ kbd {
 .menu-mini-row button:active { transform: scale(0.96); }
 .menu-studio-line { display: flex; align-items: center; gap: 10px; margin-top: 28px; color: rgba(245, 242, 233, 0.58); font-size: 8px; font-weight: 700; letter-spacing: 0.22em; }
 
+
+
 /* ── Mobile-first main menu ──────────────────────────────────────────────
    The old side-by-side 62vw + 34vw columns overflow on phone portrait; the
    menu now stacks: title copy above a full-width action list. */
@@ -1432,6 +1434,16 @@ kbd {
   .menu-button strong { font-size: 13px; }
   .menu-play { grid-column: 1 / -1; min-height: 48px; }
   .menu-mini-row { grid-column: 1 / -1; }
+}
+
+/* Small phones in landscape: widen the corridor between the copy block and
+   the nav stack so the idle rider has room to coast (the column has slack —
+   the auto margins below the nav absorb the difference, so nothing clips).
+   The studio signature line yields its space too; the topbar keeps the
+   brand, so nothing is lost. */
+@media (max-width: 740px) and (max-height: 480px) {
+  .intro-screen { gap: 44px; }
+  .menu-studio-line { display: none; }
 }
 
 /* ── Per-screen mobile fixes ─────────────────────────────────────────── */

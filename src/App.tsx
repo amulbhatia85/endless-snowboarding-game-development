@@ -593,6 +593,59 @@ export default function App() {
     };
   }, [menuView]);
 
+  // Attract-scene corridor: measure the open band the menu leaves in the
+  // idle rider's column (30% of the width) — the largest gap between the
+  // visible menu blocks — and hand it to the engine so the rider always
+  // coasts where the UI leaves room, on every device and orientation.
+  useEffect(() => {
+    if (screen !== 'menu') return;
+    const measure = () => {
+      requestAnimationFrame(() => {
+        const engine = engineRef.current;
+        if (!engine) return;
+        const columnLeft = window.innerWidth * 0.30 - 15;
+        const columnRight = window.innerWidth * 0.30 + 15;
+        const blockers: DOMRect[] = [];
+        const push = (el: Element | null) => {
+          if (!el) return;
+          const rect = el.getBoundingClientRect();
+          if (rect.width > 2 && rect.height > 2) blockers.push(rect);
+        };
+        push(document.querySelector('.topbar'));
+        document.querySelectorAll('.intro-copy > *').forEach((el) => push(el));
+        push(document.querySelector('.main-menu-nav'));
+        push(document.querySelector('.menu-mini-row'));
+        const hits = blockers
+          .filter((rect) => rect.left < columnRight && rect.right > columnLeft)
+          .sort((a, b) => a.top - b.top);
+        let top = 0;
+        let bottom = window.innerHeight;
+        let best = -1;
+        let previousBottom = 0;
+        for (const rect of hits) {
+          if (rect.top - previousBottom > best) {
+            best = rect.top - previousBottom;
+            top = previousBottom;
+            bottom = rect.top;
+          }
+          previousBottom = Math.max(previousBottom, rect.bottom);
+        }
+        if (window.innerHeight - previousBottom > best) {
+          top = previousBottom;
+          bottom = window.innerHeight;
+        }
+        engine.setAttractBand(top, bottom);
+      });
+    };
+    measure();
+    const retry = window.setTimeout(measure, 700); // once fonts have settled
+    window.addEventListener('resize', measure);
+    return () => {
+      window.clearTimeout(retry);
+      window.removeEventListener('resize', measure);
+    };
+  }, [screen]);
+
   const creditsRef = useRef<HTMLDivElement>(null);
   const toggleMuteRef = useRef<() => void>(() => {});
   const toggleMute = () => {
