@@ -1092,7 +1092,7 @@ export class AudioManager {
   // ───────────────────────── interface cues ─────────────────────────
   click(): void {
     if (!this.ready || !this.throttle('click', 0.04)) return;
-    this.tone({ freq: 1250, freqEnd: 900, dur: 0.06, gain: 0.05 });
+    this.tone({ freq: 1250, freqEnd: 900, dur: 0.07, gain: 0.09 });
   }
 
   toggleCue(on: boolean): void {

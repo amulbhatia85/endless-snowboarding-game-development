@@ -663,3 +663,94 @@ METERS · 0 GLOWSTONES"), reward lines intact, computed card opacity 1.00
 from ~0.25s through ~9.5s with the fade completing at the 10s mark (the
 old build dropped to 0 at 3.1s), phases run clean, zero console errors.
 The regression test now locks the ≥9.5s hold; suite 246/246, tsc clean.
+
+---
+
+# Mobile Menu & Touch Redesign (full UI/UX pass)
+
+Player-supplied iPhone screenshots showed: iOS long-press text selection
+during gameplay, a crowded splash, cramped main-menu columns, oversized
+dark menu panels, and clipped content in How to Play / Leaderboard /
+Settings. This pass fixes the shared root causes rather than patching
+individual screens.
+
+## Root causes found
+1. **iOS long-press callout** — `-webkit-touch-callout` /
+   `-webkit-user-select` were never set on the game surface; only
+   `touch-action: none` and a canvas `contextmenu` preventDefault existed.
+2. **Menu shell clipping** — `.menu-page-card` used
+   `max-height: calc(100dvh - 112px - insets)` (viewport math) **plus** a
+   legacy `@media (max-width: 760px)` override re-applying a different
+   calc — on real devices with safe-area insets the card lost height and
+   content clipped. The shell was also right-aligned with a fixed 84px
+   top padding built for desktop.
+3. **Main-menu crowding** — side-by-side 62vw + 34vw columns with a
+   `nowrap` title overflow on phone portrait; the legacy 760px block
+   fought the base rules in the cascade.
+4. **Landscape overlap** — with the topbar ~87px tall, tall nav content
+   centered under it: the Play button's top half was untappable at
+   844×390 (found by hit-testing, fixed structurally).
+
+## Changes
+- **Touch (1)** — `.game-app` + `.game-canvas`:
+  `-webkit-user-select: none; user-select: none; -webkit-touch-callout:
+  none; -webkit-tap-highlight-color: transparent`; reading surfaces
+  (privacy, credits, how-to cards, achievements) re-enable selection and
+  the system callout; all interactive controls get
+  `touch-action: manipulation` (kills iOS double-tap-zoom delay);
+  `pointercancel` was already handled; menus keep scrolling.
+- **Splash (2)** — big circular mountain logo and "STORIES CARVED IN
+  SNOW" tagline removed; minimal SHADOWS / GAME STUDIO wordmark with a
+  soft breathing light; hold trimmed 4.8s → 4.0s; works portrait and
+  landscape; studio branding kept in credits/topbar.
+- **Main menu (3)** — mobile-first: stacked full-width buttons on phone
+  portrait (margin-auto centering that degrades to top-aligned instead
+  of clipping when content is tall); two-column compact nav with
+  single-line buttons on short landscape; desktop side-by-side
+  preserved; all touch targets ≥ 44px (mini-row bumped from 33px).
+- **Menu shell (4, 5)** — centered, lightly translucent card
+  (rgba(10,23,37,0.6) + blur 14px + hairline border) over a soft scrim —
+  the landscape stays visible; `max-height: 100%` of the padded flex box
+  (no viewport math); `overscroll-behavior: contain`; safe-area-aware
+  padding that clears the topbar at every width (verified 84px vs 77px
+  topbar at 390, 96px vs 87px at 844).
+- **Leaderboard (7)** — on ≤480px the table becomes stacked row-cards
+  (rank / score / distance / date) instead of a squeezed wide table.
+  Still honestly local-only.
+- **How to Play (6)** — six accurate cards (jump, hold-to-backflip,
+  landing, obstacles, glowstones & powers, ride to the safe house) +
+  touch-first controls line; single column on phones.
+- **Achievements (8)** — counters wrap under the text on mobile; locked
+  vs unlocked states and progress bars unchanged.
+- **Settings (10)** — slider thumbs 13px → 17px with a 28px touch strip;
+  legacy card max-height override removed (the clipping cause); volumes
+  verified to persist across navigation (0.7 → 0.75 → reopen = 0.75).
+- **Menu sounds (11)** — coverage audit: added `audio.click()` to
+  Continue, Pause/Resume, pause-menu Main Menu, results Ride Again /
+  Main Menu, and all three crash-screen actions; the click was tuned
+  slightly more present (gain 0.05 → 0.09, 70ms) through the existing
+  Phase 10B AudioManager; sliders stay silent by design; mute respected.
+- **Animations (12)** — short press-scale feedback on menu buttons,
+  mini-row, back, toggles, segmented controls; existing hover/focus
+  preserved; reduced-motion respected (splash breathing disabled).
+- **No gameplay changes (15)** — engine, physics, progression,
+  rewards economy untouched.
+
+## Verification (headless real-render QA)
+- 390×844: all six menu pages fit, centered, no horizontal overflow,
+  back visible, tall content scrolls; settings slider persists.
+- 375×667 (SE) and 412×915 (Android): menu + settings fit after the
+  short-phone compaction.
+- 844×390 landscape: menu clears the topbar (hit-test passes through to
+  the Play button), settings/leaderboard/how fit; desktop 1280×800
+  side-by-side preserved.
+- Touch CSS: canvas `user-select: none`, `touch-action: none`, callout
+  rules present in the built stylesheet; privacy copy selectable.
+- Gameplay regression: menu → Play → ride → crash screen ("Keep
+  going?") with zero console errors. (One seed survived blind-riding by
+  pinning the rider on a log at ~145m — pre-existing engine behavior,
+  not touched by this pass.)
+- Before/after screenshots in `qa/menu-redesign/` (old-* vs new-*).
+  The live crash-card pixel screenshot is blocked by a sandbox
+  compositor deadlock with the running game — DOM-verified instead.
+- Suite 246/246, tsc clean.

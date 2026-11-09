@@ -49,6 +49,42 @@ button:focus-visible {
   min-height: 320px;
   overflow: hidden;
   background: #152a3f;
+  /* iOS long-press fix: no blue text selection, no Copy/Look Up callout
+     anywhere in the game chrome. Reading surfaces re-enable both below. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Menu reading surfaces keep normal selection and the system callout so
+   long-press Copy still works on policy/credit text. */
+.menu-page-card .page-intro,
+.menu-page-card .privacy-copy,
+.menu-page-card .credits-list,
+.menu-page-card .achievement-card,
+.menu-page-card .how-grid,
+.menu-page-card .credits-thanks {
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+
+/* Buttons and toggles: kill the iOS double-tap-zoom delay without touching
+   scroll behaviour. */
+.menu-button,
+.menu-mini-row button,
+.back-button,
+.mute-toggle,
+.segmented-control button,
+.settings-links button,
+.reward-link,
+.reward-action,
+.text-button,
+.primary-button,
+.end-run-button,
+.revive-video,
+.icon-button {
+  touch-action: manipulation;
 }
 
 .game-canvas {
@@ -58,6 +94,10 @@ button:focus-visible {
   width: 100%;
   height: 100%;
   touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .scene-vignette {
@@ -1194,13 +1234,20 @@ kbd {
   filter: drop-shadow(0 0 24px rgba(232, 201, 158, 0.24));
 }
 .studio-mark.compact { width: 34px; height: 34px; }
-.splash-wordmark { display: grid; justify-items: center; gap: 5px; margin-top: 24px; }
+.splash-wordmark { display: grid; justify-items: center; gap: 6px; margin-top: 0; }
 .splash-wordmark span {
   font-size: clamp(30px, 5vw, 54px);
   font-weight: 520;
   letter-spacing: 0.34em;
   text-indent: 0.34em;
   line-height: 1;
+  animation: splashBreathe 3.4s ease-in-out infinite;
+}
+
+/* A quiet breathing light on the studio name — the only flourish. */
+@keyframes splashBreathe {
+  0%, 100% { text-shadow: 0 0 18px rgba(232, 201, 158, 0.14); }
+  50% { text-shadow: 0 0 36px rgba(232, 201, 158, 0.36); }
 }
 .splash-wordmark strong {
   color: rgba(238, 231, 216, 0.72);
@@ -1283,7 +1330,7 @@ kbd {
   color: #ffdfa9;
 }
 .menu-button:hover { transform: translateY(-2px); }
-.menu-button:active { transform: translateY(0); }
+.menu-button:active { transform: translateY(0) scale(0.97); }
 .menu-button:focus-visible { outline: 2px solid #f0c896; outline-offset: 3px; }
 .menu-button span:first-child { display: grid; gap: 3px; }
 .menu-button strong { font-size: 14px; font-weight: 620; letter-spacing: 0.01em; }
@@ -1306,7 +1353,8 @@ kbd {
 .continue-button { border-color: rgba(168, 216, 199, 0.42); }
 .menu-mini-row { display: grid; grid-template-columns: 1fr 1px 1fr; align-items: center; padding: 4px 8px 0; }
 .menu-mini-row button {
-  padding: 8px;
+  min-height: 44px;
+  padding: 8px 14px;
   border: 0;
   background: none;
   color: rgba(245, 242, 233, 0.72);
@@ -1319,7 +1367,109 @@ kbd {
   color: #ffdfa9;
 }
 .menu-mini-row span { width: 1px; height: 16px; background: rgba(245, 242, 233, 0.18); }
+.menu-mini-row button:active { transform: scale(0.96); }
 .menu-studio-line { display: flex; align-items: center; gap: 10px; margin-top: 28px; color: rgba(245, 242, 233, 0.58); font-size: 8px; font-weight: 700; letter-spacing: 0.22em; }
+
+/* ── Mobile-first main menu ──────────────────────────────────────────────
+   The old side-by-side 62vw + 34vw columns overflow on phone portrait; the
+   menu now stacks: title copy above a full-width action list. */
+@media (max-width: 740px) {
+  .intro-screen {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 26px;
+    /* Clears the topbar; margin-auto centering below degrades to top-aligned
+       (never clipped) when the content is taller than the screen. */
+    padding: calc(88px + env(safe-area-inset-top)) 22px calc(24px + env(safe-area-inset-bottom));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    pointer-events: auto;
+  }
+  .intro-copy,
+  .main-menu-nav { margin: auto 0; }
+  .intro-copy { width: 100%; }
+  .intro-copy h1 { font-size: clamp(40px, 12.5vw, 64px); }
+  .intro-description { margin-top: 12px; font-size: 11px; }
+  .control-copy { font-size: 9px; }
+  .menu-studio-line { margin-top: 18px; }
+  .main-menu-nav { width: 100%; gap: 8px; }
+  .menu-button { min-height: 50px; border-radius: 15px; }
+  .menu-play { min-height: 58px; }
+}
+
+/* Short landscape (phones on their side): the six stacked buttons cannot fit
+   beside the topbar, so the nav goes two-column with single-line buttons. */
+@media (min-width: 741px) and (max-height: 540px) {
+  .intro-screen {
+    padding: calc(96px + env(safe-area-inset-top)) clamp(20px, 4vw, 60px) calc(18px + env(safe-area-inset-bottom));
+    gap: 26px;
+  }
+  .intro-copy,
+  .main-menu-nav { margin: auto 0; }
+  .intro-copy { width: min(520px, 50vw); }
+  .intro-copy h1 { font-size: clamp(36px, 5.4vw, 60px); }
+  .intro-description { margin-top: 10px; }
+  .control-copy { display: none; }
+  .main-menu-nav {
+    width: min(400px, 46vw);
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .menu-button { min-height: 44px; border-radius: 14px; }
+  .menu-button small { display: none; }
+  .menu-button strong { font-size: 13px; }
+  .menu-play { grid-column: 1 / -1; min-height: 48px; }
+  .menu-mini-row { grid-column: 1 / -1; }
+}
+
+/* ── Per-screen mobile fixes ─────────────────────────────────────────── */
+
+/* How to Play: single column on phones */
+@media (max-width: 520px) {
+  .how-grid { grid-template-columns: 1fr; }
+}
+
+/* Leaderboard: rows become cards instead of a wide table */
+@media (max-width: 480px) {
+  .page-leaderboard .score-table thead { display: none; }
+  .page-leaderboard .score-table,
+  .page-leaderboard .score-table tbody { display: grid; gap: 8px; width: 100%; }
+  .page-leaderboard .score-table tr {
+    display: grid;
+    grid-template-columns: 34px 1fr auto;
+    grid-template-areas:
+      'rank score distance'
+      'rank date date';
+    align-items: center;
+    gap: 2px 10px;
+    padding: 10px 12px;
+    border: 1px solid rgba(245, 242, 232, 0.1);
+    border-radius: 14px;
+    background: rgba(245, 242, 232, 0.045);
+  }
+  .page-leaderboard .score-table td { border: 0; padding: 2px 0; }
+  .page-leaderboard .score-table .rank-cell { grid-area: rank; }
+  .page-leaderboard .score-table .table-score { grid-area: score; }
+  .page-leaderboard .score-table td:nth-child(3) { grid-area: distance; text-align: right; }
+  .page-leaderboard .score-table td:last-child { grid-area: date; color: rgba(244, 241, 231, 0.45); font-size: 9px; text-align: left; }
+}
+
+
+/* Settings: touch-friendly sliders (bigger thumb + taller hit strip) */
+.volume-row input[type='range'] { height: 28px; }
+.volume-row input[type='range']::-webkit-slider-thumb { width: 17px; height: 17px; margin-top: -7px; }
+.volume-row input[type='range']::-moz-range-thumb { width: 17px; height: 17px; }
+
+/* Small press feedback on remaining controls */
+.text-button:active { opacity: 0.68; }
+.settings-links button:active,
+.segmented-control button:active,
+.reward-action:active,
+.reward-link:active { transform: scale(0.97); }
+.settings-links button,
+.segmented-control button,
+.reward-action,
+.reward-link { transition: transform 140ms ease; }
 .panel-link {
   width: 100%;
   margin-top: 12px;
@@ -1334,32 +1484,41 @@ kbd {
 }
 
 /* ───────── Menu pages ───────── */
+/* Playtest redesign — the old right-aligned 560px dark slab became an
+   oversized panel that clipped content on phones. The shell is now a
+   centered, lightly translucent card over a soft scrim: the landscape
+   stays visible, and max-height: 100% of the padded flex box removes the
+   viewport math that caused the clipping. */
 .menu-page {
   position: absolute;
   z-index: 7;
   inset: 0;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  padding: calc(84px + env(safe-area-inset-top)) clamp(22px, 6vw, 84px) calc(28px + env(safe-area-inset-bottom));
-  background: linear-gradient(90deg, rgba(8, 20, 32, 0.1), rgba(8, 20, 32, 0.42));
+  justify-content: center;
+  padding: calc(84px + env(safe-area-inset-top)) clamp(12px, 3.5vw, 28px) calc(16px + env(safe-area-inset-bottom));
+  background: linear-gradient(180deg, rgba(6, 15, 25, 0.3), rgba(6, 15, 25, 0.48));
   animation: overlayIn 240ms ease both;
 }
 .menu-page-card {
-  width: min(560px, 100%);
-  max-height: calc(100dvh - 112px - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+  width: min(600px, 100%);
+  max-height: 100%;
   overflow-y: auto;
-  padding: 26px;
-  border: 1px solid rgba(245, 242, 232, 0.16);
-  border-radius: 26px;
-  background: rgba(10, 24, 38, 0.72);
+  overscroll-behavior: contain;
+  padding: 20px 20px 24px;
+  border: 1px solid rgba(245, 242, 232, 0.13);
+  border-radius: 22px;
+  background: rgba(10, 23, 37, 0.6);
   color: #f5f2e9;
-  box-shadow: 0 28px 70px rgba(3, 10, 18, 0.3);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 24px 60px rgba(3, 10, 18, 0.34);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
   scrollbar-width: thin;
   scrollbar-color: rgba(240, 200, 150, 0.35) transparent;
   animation: introRise 420ms cubic-bezier(0.2, 0.72, 0.26, 1) both;
+}
+@media (min-width: 741px) {
+  .menu-page { padding-top: calc(96px + env(safe-area-inset-top)); }
 }
 .back-button {
   display: inline-flex;
@@ -1374,7 +1533,9 @@ kbd {
   font-size: 11px;
   cursor: pointer;
 }
+.back-button { transition: transform 140ms ease, color 160ms ease, border-color 160ms ease; }
 .back-button:hover { color: #f0c896; border-color: rgba(240, 200, 150, 0.5); }
+.back-button:active { transform: scale(0.96); }
 .back-arrow { display: grid; width: 22px; height: 22px; place-items: center; border-radius: 50%; background: rgba(245, 242, 232, 0.09); font-size: 18px; line-height: 1; }
 .menu-page-card h2 {
   margin: 13px 0 7px;
@@ -1569,17 +1730,11 @@ kbd {
 .pause-secondary { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 22px; }
 .topbar { padding-top: max(23px, env(safe-area-inset-top)); padding-left: max(clamp(24px, 5.3vw, 78px), env(safe-area-inset-left)); padding-right: max(clamp(24px, 5.3vw, 78px), env(safe-area-inset-right)); }
 
+/* Legacy mobile rules consolidated into the mobile-first blocks above —
+   the old max-height calc on the card was one root cause of the clipping. */
 @media (max-width: 760px) {
-  .intro-screen { flex-direction: column; justify-content: center; align-items: stretch; gap: 24px; padding-top: 76px; }
-  .intro-copy { max-width: 520px; }
-  .main-menu-nav { width: min(100%, 420px); gap: 7px; }
-  .menu-button { min-height: 50px; border-radius: 15px; }
-  .menu-play { min-height: 58px; }
-  .menu-studio-line { display: none; }
-  .menu-page { justify-content: center; padding: calc(70px + env(safe-area-inset-top)) 14px calc(14px + env(safe-area-inset-bottom)); }
-  .menu-page-card { max-height: calc(100dvh - 84px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); padding: 20px; border-radius: 21px; }
-  .achievement-card { grid-template-columns: 30px 1fr; }
-  .achievement-card b { grid-column: 2; }
+  .achievement-card { grid-template-columns: 30px 1fr; row-gap: 6px; }
+  .achievement-card b { grid-column: 2; justify-self: start; }
   .preference-row.quality-row { align-items: flex-start; flex-direction: column; gap: 10px; }
 }
 @media (max-width: 440px) {
@@ -1589,13 +1744,14 @@ kbd {
   .result-actions { flex-wrap: wrap; justify-content: center; }
   .result-actions .instant-restart { width: 100%; justify-content: center; }
 }
-@media (max-height: 520px) {
-  .intro-copy h1 { font-size: clamp(36px, 6.6vw, 60px); }
-  .intro-description { margin-top: 8px; }
-  .main-menu-nav { gap: 6px; }
-  .menu-button { min-height: 43px; padding-top: 7px; padding-bottom: 7px; }
-  .menu-play { min-height: 50px; }
+/* Shorter phones (SE-class and up): compact single-line buttons so the
+   whole menu fits without scrolling. */
+@media (max-width: 740px) and (max-height: 760px) {
+  .menu-button { min-height: 46px; }
   .menu-button small { display: none; }
+  .menu-play { min-height: 52px; }
+  .intro-copy h1 { font-size: clamp(30px, 8vw, 44px); }
+  .control-copy { display: none; }
 }
 
 #crash-title strong { font-weight: 750; letter-spacing: 0.04em; }
@@ -1790,6 +1946,7 @@ kbd {
 }
 @media (prefers-reduced-motion: reduce) {
   .level-completion, .level-introduction { animation: none; }
+  .splash-wordmark span { animation: none; }
 }
 
 /* ── Phase 5A developer level selector (?dev=1) ─────────────────────── */

@@ -410,7 +410,7 @@ export default function App() {
   // Studio splash timing. The game world is already rendering behind it, so
   // this also acts as the asset warm-up window without blocking first paint.
   useEffect(() => {
-    const id = window.setTimeout(() => setSplashDone(true), 4800);
+    const id = window.setTimeout(() => setSplashDone(true), 4000);
     return () => window.clearTimeout(id);
   }, []);
 
@@ -1026,12 +1026,10 @@ export default function App() {
             {Array.from({ length: 18 }, (_, index) => <span key={index} style={{ ['--i' as string]: index }} />)}
           </div>
           <div className="splash-logo-wrap">
-            <StudioMark />
             <div className="splash-wordmark">
               <span>SHADOWS</span>
               <strong>GAME STUDIO</strong>
             </div>
-            <span className="splash-tagline">STORIES CARVED IN SNOW</span>
           </div>
           <span className="splash-skip">TAP TO CONTINUE</span>
         </section>
@@ -1048,7 +1046,7 @@ export default function App() {
 
         <div className="header-actions">
           {(screen === 'playing' || screen === 'paused') && (
-            <button className="icon-button pause-button" onClick={togglePause} aria-label={screen === 'paused' ? 'Resume game' : 'Pause game'}>
+            <button className="icon-button pause-button" onClick={() => { audio.click(); togglePause(); }} aria-label={screen === 'paused' ? 'Resume game' : 'Pause game'}>
               <PauseIcon playing={screen === 'playing'} />
             </button>
           )}
@@ -1170,7 +1168,7 @@ export default function App() {
               <span><strong>Play</strong><small>Start a new descent</small></span><span className="button-arrow"><ArrowIcon /></span>
             </button>
             {hasParkedRun && (
-              <button className="menu-button continue-button" onClick={continueParkedRun}>
+              <button className="menu-button continue-button" onClick={() => { audio.click(); continueParkedRun(); }}>
                 <span><strong>Continue</strong><small>Resume your parked run</small></span><span className="button-arrow"><ArrowIcon /></span>
               </button>
             )}
@@ -1357,12 +1355,14 @@ export default function App() {
                 <h2 id="menu-page-title">How to Play</h2>
                 <p className="page-intro">One button. A whole mountain of timing.</p>
                 <div className="how-grid">
-                  <article><span>01</span><strong>Jump</strong><p>Tap, click, or press Space while riding to leave the snow.</p></article>
-                  <article><span>02</span><strong>Backflip</strong><p>Hold jump to start one backflip. The rider levels out after a full rotation.</p></article>
-                  <article><span>03</span><strong>Land clean</strong><p>Match the slope when you land. Bad angles and obstacles end the run.</p></article>
-                  <article><span>04</span><strong>Chase light</strong><p>Glowstones, distance, smooth landings and combos all build your score.</p></article>
+                  <article><span>01</span><strong>Jump</strong><p>Tap the screen, click, or press Space while riding to leave the snow. Short taps hop; timing carries you over hazards.</p></article>
+                  <article><span>02</span><strong>Hold for a backflip</strong><p>Press and hold to start one backflip. The rider levels out after a full rotation — release early for a half turn if the landing calls for it.</p></article>
+                  <article><span>03</span><strong>Land clean</strong><p>Match the slope when you touch down. Landing at a bad angle ends the run — just like hitting an obstacle.</p></article>
+                  <article><span>04</span><strong>Read the mountain</strong><p>Rocks, fallen logs, swinging logs and gaps line the trail. Jump the low ones, steer your flight past the rest.</p></article>
+                  <article><span>05</span><strong>Glowstones & powers</strong><p>Golden glowstones build your score and wallet. Magnet pulls them in, Shield saves one crash, Double shines your points for a while.</p></article>
+                  <article><span>06</span><strong>Ride to the safe house</strong><p>Each level asks for 50,000 points. Reach the target and a warm safe house completes the level — then a new trail begins.</p></article>
                 </div>
-                <div className="how-controls"><span className="keycap">SPACE</span> Jump / hold to flip <i /> <span className="keycap">ESC</span> Pause <i /> <span className="keycap">M</span> Mute</div>
+                <div className="how-controls"><span className="keycap">TAP</span> Jump / hold to flip <i /> <span className="keycap">SPACE</span> Jump <i /> <span className="keycap">ESC</span> Pause <i /> <span className="keycap">M</span> Mute</div>
               </>
             )}
 
@@ -1428,14 +1428,14 @@ export default function App() {
                 note moves to a tiny footnote below the actions. */}
             <div className={rewardedReady ? 'crash-secondary' : 'crash-secondary no-revive'}>
               {rewardedReady && (
-                <button className="revive-video" onClick={watchRewardedRevive} disabled={adBusy} aria-label="Watch a video to revive this run">
+                <button className="revive-video" onClick={() => { audio.click(); watchRewardedRevive(); }} disabled={adBusy} aria-label="Watch a video to revive this run">
                   <VideoIcon />
                   <small>{adBusy ? 'OPENING…' : 'WATCH AD'}</small>
                 </button>
               )}
               <div className="crash-secondary-group">
-                <button className="end-run-button" onClick={restartFromCrash} disabled={adBusy}>Restart Level</button>
-                <button className="end-run-button" onClick={endRun} disabled={adBusy}>End Run</button>
+                <button className="end-run-button" onClick={() => { audio.click(); restartFromCrash(); }} disabled={adBusy}>Restart Level</button>
+                <button className="end-run-button" onClick={() => { audio.click(); endRun(); }} disabled={adBusy}>End Run</button>
               </div>
             </div>
             {(adNotice || !rewardedReady) && (
@@ -1460,7 +1460,7 @@ export default function App() {
               <div className="pause-secondary">
                 <button className="text-button" onClick={() => { audio.click(); beginRun(); }}>Restart Run</button>
                 <button className="text-button" onClick={() => { audio.click(); setMenuView('settings'); }}>Settings</button>
-                <button className="text-button" onClick={() => returnToMainMenu(true)}>Main Menu</button>
+                <button className="text-button" onClick={() => { audio.click(); returnToMainMenu(true); }}>Main Menu</button>
               </div>
             </div>
             <span className="escape-note"><kbd>ESC</kbd> TO RESUME</span>
@@ -1506,10 +1506,10 @@ export default function App() {
             </div>
 
             <div className="button-row result-actions">
-              <button className="primary-button" onClick={() => void resultsActionRef.current('restart')} disabled={adBusy}>
+              <button className="primary-button" onClick={() => { audio.click(); void resultsActionRef.current('restart'); }} disabled={adBusy}>
                 <span>{adBusy ? 'Please wait...' : 'Ride again'}</span><span className="button-arrow"><ArrowIcon /></span>
               </button>
-              <button className="text-button" onClick={() => void resultsActionRef.current('menu')} disabled={adBusy}>Main Menu</button>
+              <button className="text-button" onClick={() => { audio.click(); void resultsActionRef.current('menu'); }} disabled={adBusy}>Main Menu</button>
               <span className="instant-restart"><kbd>SPACE</kbd> INSTANT RESTART</span>
             </div>
           </div>
