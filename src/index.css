@@ -1770,7 +1770,11 @@ kbd {
   font-weight: 450;
   letter-spacing: 0.12em;
 }
-.level-completion { animation: levelComplete 3.1s ease both; }
+/* Playtest fix — the completion card's fade must span the engine's whole
+   celebration hold. The duration is set inline from the engine constant
+   (App.tsx); this stylesheet value is only the no-engine fallback. They
+   once drifted (3.1s fade on a 6.5s hold) and the data vanished mid-screen. */
+.level-completion { animation: levelComplete 10s ease both; }
 .level-introduction { animation: levelComplete 2.4s ease both; }
 .level-completion p, .level-introduction p {
   font-size: 8px;
@@ -1781,7 +1785,7 @@ kbd {
 .level-introduction span { font-size: 10px; letter-spacing: 0.07em; }
 @keyframes levelComplete {
   0% { opacity: 0; transform: translateY(10px); }
-  25%, 75% { opacity: 1; transform: translateY(0); }
+  8%, 92% { opacity: 1; transform: translateY(0); }
   100% { opacity: 0; transform: translateY(-6px); }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -1938,11 +1942,33 @@ kbd {
 .reward-link span { color: #ffd98b; }
 
 /* Completion card reward ledger (Phase 7) */
+/* Playtest fix — the run's headline numbers (score / meters / glowstones)
+   join the card so there is real data to read while it holds. */
+.level-completion-stats {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px 26px;
+  margin-top: 12px;
+  color: rgba(245, 242, 233, 0.5);
+  font-size: 7.5px;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  opacity: 0;
+  animation: continueHint 0.6s ease 0.15s forwards;
+}
+.level-completion-stats b {
+  margin-right: 7px;
+  color: #f5f2e9;
+  font-size: 13.5px;
+  font-weight: 560;
+  letter-spacing: 0;
+}
 .level-rewards {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  margin-top: 10px;
+  margin-top: 12px;
 }
 .level-rewards .reward-line {
   font-size: 9.5px;

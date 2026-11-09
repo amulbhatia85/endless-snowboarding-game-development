@@ -861,6 +861,12 @@ export default function App() {
 
   const achievements = getAchievements(lifetime);
 
+  // Playtest fix — the completion card's fade animation must span exactly the
+  // engine's celebration hold. They once drifted apart (a 3.1s CSS fade over a
+  // longer hold made the card invisible while the phase still ran), so the
+  // duration is now read from the engine's own level configuration.
+  const completionHoldSeconds = engineRef.current?.levels.current.transitions.end.completionSeconds ?? 10;
+
   const scoreTable = (
     <div className="score-table-wrap">
       <table className="score-table">
@@ -1100,10 +1106,19 @@ export default function App() {
       {screen === 'playing' && hud.level && hud.level.phase !== 'riding' && (
         <div className="level-cinematic" aria-live="polite">
           {hud.level.phase === 'celebrating' && (
-            <div key={hud.level.number} className="level-completion">
+            <div
+              key={hud.level.number}
+              className="level-completion"
+              style={{ animationDuration: `${completionHoldSeconds}s` }}
+            >
               <span className="level-completion-rule" />
               <p>50,000 POINTS · A JOURNEY WELL RIDDEN</p>
               <h2>LEVEL {hud.level.number} COMPLETED</h2>
+              <div className="level-completion-stats" aria-label="Run so far">
+                <span><b>{formatNumber(hud.score)}</b> SCORE</span>
+                <span><b>{formatNumber(hud.distance)}</b> METERS</span>
+                <span><b>{formatNumber(hud.coins)}</b> GLOWSTONES</span>
+              </div>
               {hud.level.reward && (
                 <div className="level-rewards" aria-label="Glowstones earned this level">
                   <span className="reward-line">{hud.level.reward.collected} GLOWSTONES COLLECTED</span>

@@ -324,10 +324,11 @@ export function generateLevel(number: number, journeySeed: number): LevelConfigu
     transitions: {
       start: { kind: 'house-exit', seconds: 2.4 },
       // Playtest fix — the completion card used to auto-advance after 3.1s,
-      // which came and went before the reward lines could be read. It now
-      // holds for a comfortable read; a press after the engine's 1.1s grace
-      // still continues early (see SnowGameEngine.press).
-      end: { kind: 'safe-house', entrySeconds: 1.5, completionSeconds: 6.5 },
+      // which came and went before the reward lines and stats could be read.
+      // It now holds for a generous read; a press after the engine's 1.1s
+      // grace still continues early (see SnowGameEngine.press). The card's
+      // CSS fade reads this exact value (App.tsx), so they cannot drift.
+      end: { kind: 'safe-house', entrySeconds: 1.5, completionSeconds: 10 },
     },
   };
 }

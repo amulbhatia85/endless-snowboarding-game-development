@@ -244,13 +244,13 @@ test('The completion card holds long enough to read the level rewards', () => {
   const run = game.run;
   while (run.levelPhase !== 'celebrating') { game.clock += 1 / 120; game.step(1 / 120); }
   let held = 0;
-  while (run.levelPhase === 'celebrating' && held < 12) {
+  while (run.levelPhase === 'celebrating' && held < 16) {
     game.clock += 1 / 120;
     game.step(1 / 120);
     held += 1 / 120;
   }
   assert.equal(run.levelPhase, 'exiting', 'the card still auto-continues without a press');
-  assert.ok(held >= 6, `the completion card held for ${held.toFixed(1)}s — readable (was 3.1s)`);
+  assert.ok(held >= 9.5, `the completion card held for ${held.toFixed(1)}s — readable (was 3.1s)`);
 });
 
 // ───────────────────────── the next level ─────────────────────────

@@ -636,3 +636,30 @@ Verified:
   intended ~6.5s. A pixel screenshot of the live card is not capturable
   in this sandbox (CDP capture deadlocks under the single-process
   chromium with an active rAF loop) — DOM-level verification above.
+
+## Level-completion card: the data no longer vanishes (round 2)
+
+Root cause found: the previous hold fix (6.5s engine time) was masked by
+the card's CSS animation — `.level-completion` still ran a **3.1s fade**
+with `both` fill, so the card turned invisible at 3.1 seconds and sat
+unseen while the phase ran on. That is the "suddenly the data
+disappeared" the player saw.
+
+Fixes:
+- The card's fade duration is now read **from the engine's own
+  `completionSeconds`** at render time (inline `animationDuration`), so
+  the CSS and the engine hold can never drift apart again.
+- The hold is now **10 seconds** (was 3.1s originally, 6.5s interim);
+  a press after the 1.1s grace still continues early.
+- New keyframes hold full opacity until the end of the span (8%–92%),
+  instead of fading at 75% of a short window.
+- The card now also shows the run's headline numbers — **score /
+  meters / glowstones** — above the reward lines, so there is real data
+  to read while it holds.
+
+Verified in the real rendered app (production build, crafted parked run
+at the exact level target): stats row renders ("50,091 SCORE · 91
+METERS · 0 GLOWSTONES"), reward lines intact, computed card opacity 1.00
+from ~0.25s through ~9.5s with the fade completing at the 10s mark (the
+old build dropped to 0 at 3.1s), phases run clean, zero console errors.
+The regression test now locks the ≥9.5s hold; suite 246/246, tsc clean.
