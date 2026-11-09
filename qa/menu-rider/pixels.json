@@ -1,0 +1,173 @@
+{
+ "iphone-portrait": {
+  "w": 390,
+  "h": 844,
+  "band": {
+   "top": 336,
+   "bottom": 394
+  },
+  "rider": {
+   "top": 350,
+   "bottom": 382
+  },
+  "inside": true,
+  "navFit": {
+   "bottom": 804,
+   "fits": true,
+   "noHoriz": true
+  },
+  "errors": []
+ },
+ "iphone-landscape": {
+  "w": 844,
+  "h": 390,
+  "band": {
+   "top": 315,
+   "bottom": 390
+  },
+  "rider": {
+   "top": 336,
+   "bottom": 369
+  },
+  "inside": true,
+  "navFit": {
+   "bottom": 345,
+   "fits": true,
+   "noHoriz": true
+  },
+  "errors": []
+ },
+ "se-portrait": {
+  "w": 375,
+  "h": 667,
+  "band": {
+   "top": 251,
+   "bottom": 294
+  },
+  "rider": {
+   "top": 257,
+   "bottom": 290
+  },
+  "inside": true,
+  "navFit": {
+   "bottom": 634,
+   "fits": true,
+   "noHoriz": true
+  },
+  "errors": []
+ },
+ "se-landscape": {
+  "w": 667,
+  "h": 375,
+  "band": {
+   "top": 204,
+   "bottom": 248
+  },
+  "rider": {
+   "top": 211,
+   "bottom": 243
+  },
+  "inside": true,
+  "navFit": {
+   "bottom": 588,
+   "fits": false,
+   "noHoriz": true
+  },
+  "errors": []
+ },
+ "plus-portrait": {
+  "w": 414,
+  "h": 896,
+  "band": {
+   "top": 351,
+   "bottom": 434
+  },
+  "rider": {
+   "top": 377,
+   "bottom": 409
+  },
+  "inside": true,
+  "navFit": {
+   "bottom": 843,
+   "fits": true,
+   "noHoriz": true
+  },
+  "errors": []
+ },
+ "plus-landscape": {
+  "w": 896,
+  "h": 414,
+  "band": {
+   "top": 328,
+   "bottom": 414
+  },
+  "rider": {
+   "top": 355,
+   "bottom": 388
+  },
+  "inside": true,
+  "navFit": {
+   "bottom": 357,
+   "fits": true,
+   "noHoriz": true
+  },
+  "errors": []
+ },
+ "ipad-portrait": {
+  "w": 768,
+  "h": 1024,
+  "band": {
+   "top": 636,
+   "bottom": 1024
+  },
+  "rider": {
+   "top": 814,
+   "bottom": 846
+  },
+  "inside": true,
+  "navFit": {
+   "bottom": 753,
+   "fits": true,
+   "noHoriz": true
+  },
+  "errors": []
+ },
+ "ipad-landscape": {
+  "w": 1024,
+  "h": 768,
+  "band": {
+   "top": 517,
+   "bottom": 768
+  },
+  "rider": {
+   "top": 626,
+   "bottom": 659
+  },
+  "inside": true,
+  "navFit": {
+   "bottom": 610,
+   "fits": true,
+   "noHoriz": true
+  },
+  "errors": []
+ },
+ "desktop": {
+  "w": 1280,
+  "h": 800,
+  "band": {
+   "top": 543,
+   "bottom": 800
+  },
+  "rider": {
+   "top": 656,
+   "bottom": 688
+  },
+  "inside": true,
+  "navFit": {
+   "bottom": 626,
+   "fits": true,
+   "noHoriz": true
+  },
+  "errors": []
+ }
+}

@@ -754,3 +754,129 @@ individual screens.
   The live crash-card pixel screenshot is blocked by a sandbox
   compositor deadlock with the running game — DOM-verified instead.
 - Suite 246/246, tsc clean.
+
+## Refinement round — safe-area title, panel-free pages, menu click sound
+
+Scope (player-requested, three items only): (1) the title must clear the
+Dynamic Island in iPhone landscape on every supported size; (2) every
+secondary menu (Achievements, Rewards, Leaderboard, How to Play, Credits,
+Settings, Privacy) must drop its large dark container and live directly on
+the mountain scenery; (3) one consistent, soft click on all menu navigation
+and every Back button. Main-menu design, scenery, gameplay and visual
+identity untouched.
+
+### Title / safe areas
+- `viewport-fit=cover` confirmed in the built HTML, so `env(safe-area-inset-*)`
+  is live on notched devices.
+- Horizontal insets merged into every shell padding via
+  `max(clamp(...), calc(env(safe-area-inset-left/right) + Npx))`:
+  `.topbar` (+20px), `.intro-screen` base (+24px) and its portrait/landscape
+  blocks (longhand), `.menu-page` (+22px). The wordmark can no longer sit
+  under the Dynamic Island; in plain 844×390 the title starts at x=31.
+
+### Panel-free secondary screens
+- `.menu-page` is now the full-screen scroll container (flex column,
+  `overflow-y: auto`, `overscroll-behavior: contain`) with a readability
+  scrim (rgba(5,13,22) .62 → .24 → .55) over the live scenery — the dark
+  card background, border and shadow are deleted, not transparentized.
+- `.menu-page-card` is a transparent `min(680px, 100%)` column, centered,
+  `min-height: 100%`; h2/eyebrow/page-intro float on the scenery with
+  text-shadows. Small items keep minimal glass: achievement/how/reward/
+  leaderboard cards and the wallet strip use rgba(8,18,30,.5) + blur(6px).
+- Leaderboard: desktop rows get alternating striping and rounded first/last
+  cells; the ≤480px card layout is preserved. How-to-play grid is
+  `auto-fit minmax(250px, 1fr)`.
+- Back button: sticky glass pill, reparented out of the card (the card's
+  introRise animation + its own box would otherwise break/limit sticking),
+  aligned to the 680px column via `margin-left: max(0px, calc((100% - 680px)/2))`.
+- **Sticky-inset pitfall (found by measurement, worth remembering):** with
+  `padding-top: 92px` on the scroller, this Chromium resolves the sticky
+  `top: 92px` against the content edge, so the pill rendered at 184px —
+  92px too low, overlapping the page title (QA initially passed because
+  "title visible" only checked for negative offsets). Fix: the scroller's
+  top padding moved into the button's `margin-top`, so content edge equals
+  padding edge and the pin position is identical in Chromium and WebKit.
+  The pill now pins at exactly 92px (5px below the 87px topbar) on every
+  page, verified at scroll 0 and at full scroll.
+- Credits: `.credits-viewport` (flex:1, masked fade, own scrollbar) rolls
+  at 26px/s after 2.2s idle; pointer/wheel/touch pauses it and it resumes
+  2.2s after the last interaction; reduced-motion disables the auto-roll.
+  **Second pitfall:** fractional `scrollTop` assignments round to whole
+  pixels (sub-half-px rounds to zero), so 26px/s of 0.43px/frame writes
+  never accumulated — the roll kept a float position and writes whole-pixel
+  steps only. Verified: +59px over the measured window, pause works.
+
+### Click sound
+- One soft tick for all menu navigation and Back: retuned 1180→840Hz,
+  90ms, gain 0.13 (throttle 0.04s kept). Coverage audit found exactly one
+  control without a sound (the vibration toggle); buyCosmetic already
+  plays its own achievement/click internally, so adding another would
+  double-sound — left as is. Sliders/toggles emit single clicks only.
+
+### Verification (headless real-render QA, `qa/menu-refine/`)
+- 844×390 landscape, all six pages: panel removed (bg/border/shadow all
+  gone), no horizontal overflow, title + back visible, **no back/title
+  overlap**, back pins at 92px through full scroll and clears the topbar;
+  page-level scrolling reaches the end with nothing clipped.
+- 390×844 portrait regression: nav fits, title visible, achievements page
+  clean. Safe-area regexes verified in the minified stylesheet.
+- Before/after: the 498e4a3 build still renders the old dark panel
+  (rgba(10,23,37,.6)) on the same page — new build has none.
+- Gameplay on the final build: menu → Play → ride (HUD advancing) →
+  pause → resume → crash card ("Keep going?") → End Run → results
+  overlay → Ride again → riding again; zero console errors. Blind rides
+  still exhibit the pre-existing obstacle-pin quirk (rider wedges ~60m
+  without crashing) — reproduced identically on the before build, so it
+  is engine behavior untouched by this round; no engine files changed.
+- Suite 246/246, tsc clean, vite build 2.1s.
+- Headless QA only — real-device checks (Dynamic Island, safe areas,
+  scroll feel, sound) remain for the player's iPhone.
+
+## Refinement follow-up — idle rider visible on the main menu
+
+The player reported the menu's idle rider rendering behind the menu UI. Root
+cause: the attract scene drew the rider at 72% of the width on the gameplay
+ground line (60.5% of height) — inside the nav stack on every phone layout.
+
+### Fix — the shell measures the corridor, the engine rides it
+- `App.tsx` measures the menu's open band in the rider's column (30% of the
+  width): the largest vertical gap between the visible blocks (topbar,
+  intro-copy children, nav, mini-row), re-measured on menu entry, after fonts
+  settle, and on resize. It hands the band to `engine.setAttractBand(top,
+  bottom)`.
+- The engine's attract scene (`attractSurface`) is a **display line only**:
+  the rider is anchored at the band's centre (biased for the ~28px sprite
+  above / 3px below), and the terrain undulation is damped to the band's own
+  headroom (max 0.12x the ±70px envelope). Gameplay, saves, checkpoints and
+  parked-run restore keep sampling `terrainAt`'s gameplay line — an earlier
+  flag-based attempt broke parked-run restore (caught by the suite: recovery
+  tests sample terrain in menu status) and was replaced by this draw-path
+  surface before commit.
+- Camera: the menu rider sits at 30% of the width (was 72%), clear of the
+  nav column in every side-by-side layout.
+- Fallback for engine-only contexts (no DOM): aspect-blended fraction
+  (0.455 portrait → 0.79 landscape), same damped noise.
+- CSS: small phones in landscape (≤740px wide, ≤480px tall) get a 44px
+  copy↔nav gap and the studio signature line yields its space (the topbar
+  keeps the brand) so the corridor is wide enough; the column's auto margins
+  absorb the difference, so nothing clips.
+
+### Verification
+- Unit (`tests/menuscene.test.mjs`, 4 tests): the drawn rider anchor (from
+  the recorded draw stream) sits inside the measured CSS bands at
+  390×844 / 844×390 / 1280×800; `terrainAt` stays on the gameplay line in
+  menu status; fresh runs spawn on the gameplay ground; parked runs survive
+  resize-in-menu; `setAttractBand` centres the rider and damps noise to the
+  band headroom, degrading gracefully in a too-narrow corridor.
+- Browser (real rendered game, pixel-scan of the live canvas — the rider's
+  persistent dark silhouette vs the DOM-measured band): INSIDE on all nine
+  sizes — 390×844, 844×390, 375×667, 667×375, 414×896, 896×414, 768×1024,
+  1024×768, 1280×800 — with zero console errors; nav still fits everywhere
+  (small-landscape menus were already scrollable before this change).
+- Screenshots in `qa/menu-rider/`; pixel-scan data in `pixels.json`.
+- Suite 250/250 (246 prior + 4 new), tsc clean.
+
+### Build artifacts (this round)
+Both workflows re-armed for the active branch and dispatched: Android
+commits `Afterglow.apk` back to the branch; iOS produces the unsigned
+device IPA + simulator app as Actions artifacts (`Afterglow-iOS-packages`).

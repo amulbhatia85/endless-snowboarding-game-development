@@ -544,6 +544,109 @@ export default function App() {
     return () => window.clearTimeout(id);
   }, [toast]);
 
+  // Credits roll — a slow, smooth upward scroll that pauses the moment the
+  // player holds or scrolls manually, resuming after a quiet beat. Honors
+  // reduced-motion (no auto-scroll; the viewport still scrolls by hand).
+  useEffect(() => {
+    if (menuView !== 'credits') return;
+    const el = creditsRef.current;
+    if (!el) return;
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    let raf = 0;
+    let held = false;
+    let lastTouch = performance.now();
+    let last = performance.now();
+    // Fractional scrollTop assignments round to whole pixels (and below half a
+    // pixel round to zero), so the roll keeps its own float position and only
+    // writes whole-pixel steps — otherwise 26px/s never accumulates.
+    let pos = el.scrollTop;
+    const step = (now: number) => {
+      const dt = Math.min(0.05, (now - last) / 1000);
+      last = now;
+      const idle = now - lastTouch > 2200;
+      const max = el.scrollHeight - el.clientHeight;
+      if (!held && idle && el.scrollTop < max - 0.5) {
+        pos = Math.min(max, Math.max(pos, el.scrollTop) + 26 * dt);
+        const whole = Math.round(pos);
+        if (whole > el.scrollTop) el.scrollTop = whole;
+      } else {
+        pos = el.scrollTop;
+      }
+      raf = requestAnimationFrame(step);
+    };
+    const mark = () => { lastTouch = performance.now(); };
+    const hold = () => { held = true; mark(); };
+    const release = () => { held = false; mark(); };
+    el.addEventListener('pointerdown', hold);
+    el.addEventListener('pointerup', release);
+    el.addEventListener('pointercancel', release);
+    el.addEventListener('wheel', mark, { passive: true });
+    el.addEventListener('touchmove', mark, { passive: true });
+    raf = requestAnimationFrame(step);
+    return () => {
+      cancelAnimationFrame(raf);
+      el.removeEventListener('pointerdown', hold);
+      el.removeEventListener('pointerup', release);
+      el.removeEventListener('pointercancel', release);
+      el.removeEventListener('wheel', mark);
+      el.removeEventListener('touchmove', mark);
+    };
+  }, [menuView]);
+
+  // Attract-scene corridor: measure the open band the menu leaves in the
+  // idle rider's column (30% of the width) — the largest gap between the
+  // visible menu blocks — and hand it to the engine so the rider always
+  // coasts where the UI leaves room, on every device and orientation.
+  useEffect(() => {
+    if (screen !== 'menu') return;
+    const measure = () => {
+      requestAnimationFrame(() => {
+        const engine = engineRef.current;
+        if (!engine) return;
+        const columnLeft = window.innerWidth * 0.30 - 15;
+        const columnRight = window.innerWidth * 0.30 + 15;
+        const blockers: DOMRect[] = [];
+        const push = (el: Element | null) => {
+          if (!el) return;
+          const rect = el.getBoundingClientRect();
+          if (rect.width > 2 && rect.height > 2) blockers.push(rect);
+        };
+        push(document.querySelector('.topbar'));
+        document.querySelectorAll('.intro-copy > *').forEach((el) => push(el));
+        push(document.querySelector('.main-menu-nav'));
+        push(document.querySelector('.menu-mini-row'));
+        const hits = blockers
+          .filter((rect) => rect.left < columnRight && rect.right > columnLeft)
+          .sort((a, b) => a.top - b.top);
+        let top = 0;
+        let bottom = window.innerHeight;
+        let best = -1;
+        let previousBottom = 0;
+        for (const rect of hits) {
+          if (rect.top - previousBottom > best) {
+            best = rect.top - previousBottom;
+            top = previousBottom;
+            bottom = rect.top;
+          }
+          previousBottom = Math.max(previousBottom, rect.bottom);
+        }
+        if (window.innerHeight - previousBottom > best) {
+          top = previousBottom;
+          bottom = window.innerHeight;
+        }
+        engine.setAttractBand(top, bottom);
+      });
+    };
+    measure();
+    const retry = window.setTimeout(measure, 700); // once fonts have settled
+    window.addEventListener('resize', measure);
+    return () => {
+      window.clearTimeout(retry);
+      window.removeEventListener('resize', measure);
+    };
+  }, [screen]);
+
+  const creditsRef = useRef<HTMLDivElement>(null);
   const toggleMuteRef = useRef<() => void>(() => {});
   const toggleMute = () => {
     const muted = !audio.settings.muted;
@@ -1195,10 +1298,10 @@ export default function App() {
 
       {menuView !== 'home' && (screen === 'menu' || screen === 'paused') && (
         <section className="menu-page" aria-labelledby="menu-page-title">
+          <button className="back-button" onClick={() => { audio.click(); setMenuView('home'); }} aria-label="Back">
+            <span className="back-arrow">‹</span> Back
+          </button>
           <div className="menu-page-card">
-            <button className="back-button" onClick={() => { audio.click(); setMenuView('home'); }} aria-label="Back">
-              <span className="back-arrow">‹</span> Back
-            </button>
 
             {menuView === 'achievements' && (
               <>
@@ -1315,7 +1418,7 @@ export default function App() {
                 <div className="settings-section preference-rows">
                   <div className="preference-row">
                     <span><strong>Vibration</strong><small>Coins, landings and crashes</small></span>
-                    <button className={`mute-toggle ${preferences.vibration ? 'on' : ''}`} onClick={() => { updatePreferences({ vibration: !preferences.vibration }); vibrate('soft'); }} aria-pressed={preferences.vibration}>
+                    <button className={`mute-toggle ${preferences.vibration ? 'on' : ''}`} onClick={() => { audio.click(); updatePreferences({ vibration: !preferences.vibration }); vibrate('soft'); }} aria-pressed={preferences.vibration}>
                       <span className="mute-knob" /><em>{preferences.vibration ? 'ON' : 'OFF'}</em>
                     </button>
                   </div>
@@ -1367,18 +1470,20 @@ export default function App() {
             )}
 
             {menuView === 'credits' && (
-              <div className="credits-page">
-                <StudioMark />
-                <div className="eyebrow centered"><span className="eyebrow-dot" />SHADOWS GAME STUDIO</div>
-                <h2 id="menu-page-title">Afterglow</h2>
-                <p className="page-intro">An original endless snowboarding journey.</p>
-                <dl className="credits-list">
-                  <div><dt>Game design & development</dt><dd>Shadows Game Studio</dd></div>
-                  <div><dt>Music & sound</dt><dd>Original generative score, performed live by the game</dd></div>
-                  <div><dt>Art direction</dt><dd>Shadows Game Studio</dd></div>
-                  <div><dt>Technology</dt><dd>Canvas, Web Audio, React and Capacitor</dd></div>
-                </dl>
-                <p className="credits-thanks">Thank you for riding with us.</p>
+              <div className="credits-viewport" ref={creditsRef}>
+                <div className="credits-page">
+                  <StudioMark />
+                  <div className="eyebrow centered"><span className="eyebrow-dot" />SHADOWS GAME STUDIO</div>
+                  <h2 id="menu-page-title">Afterglow</h2>
+                  <p className="page-intro">An original endless snowboarding journey.</p>
+                  <dl className="credits-list">
+                    <div><dt>Game design & development</dt><dd>Shadows Game Studio</dd></div>
+                    <div><dt>Music & sound</dt><dd>Original generative score, performed live by the game</dd></div>
+                    <div><dt>Art direction</dt><dd>Shadows Game Studio</dd></div>
+                    <div><dt>Technology</dt><dd>Canvas, Web Audio, React and Capacitor</dd></div>
+                  </dl>
+                  <p className="credits-thanks">Thank you for riding with us.</p>
+                </div>
               </div>
             )}
 
