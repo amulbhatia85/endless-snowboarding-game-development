@@ -7,6 +7,14 @@ name: Build iOS
 # trigger it).
 on:
   workflow_dispatch:
+  # Fires only when this workflow file itself changes (kept so the build
+  # can be regenerated from this branch on demand; game-code pushes do
+  # NOT trigger it until the playtest flow is signed off).
+  push:
+    branches:
+      - arena/62ca48ad-endless-snowboarding-game-deve
+    paths:
+      - .github/workflows/build-ios.yml
 
 jobs:
   simulator:
