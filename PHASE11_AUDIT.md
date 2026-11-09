@@ -540,3 +540,126 @@ Feedback from the first iPhone test, fixed once in the shared code base
 
 Cloud builds for Android/iOS were switched to manual dispatch — the web
 build is the test surface until the playtest is signed off.
+
+---
+
+# Revive Screen — One-Line Button Row (playtest feedback)
+
+The revive offer used to be an oversized standalone gold button floating
+above the two secondary buttons. All three actions now share a single
+row, left to right: **Watch Ad & Revive · Restart Level · End Run**.
+
+- The revive button keeps its gold primary colour but is sized to match
+  its neighbours (44 px tall, same padding rhythm; was min-width 290 px
+  and 54 px tall).
+- The crash panel widened slightly (480 → 560 px) so the three buttons
+  fit on one line down to small-phone landscape widths.
+- Verified with the real built stylesheet + exact markup at 844×390 and
+  568×320: all three buttons on one line, equal heights, gold preserved
+  (screenshots in `qa/phase11-revive-row/`). The web build (where the
+  revive offer is absent — rewarded ads are native-only) renders the
+  two-button row on one line in the real app.
+
+## Revive screen polish (round 2)
+
+- The frozen game scene **blurs** behind the crash overlay
+  (`backdrop-filter: blur(9px)` + slightly deeper tint).
+- The crash head is now two columns: "Revive ?" (unbolded, was a heavy
+  strong) with the reason and level line on the left, and the four run
+  stats (score / meters / glowstones / speed) on the right.
+- Clear breathing room between the reason text and the action row
+  (~45–70 px measured).
+- "Watch Ad & Revive" is replaced by a compact gold **video button** —
+  video glyph with a very small "WATCH AD" caption underneath — in the
+  same one-line row as Restart Level and End Run (all 54 px tall).
+
+Verified: real web crash screen (blur computed, stats right of copy,
+70 px gap, one-line buttons, no console errors) and the native 3-button
+row with the built stylesheet at 844×390 (screenshots in
+`qa/phase11-revive-row/`). Suite 245/245, tsc clean.
+
+## Revive screen relayout (round 3 — redesign)
+
+The crash screen is now a composed card instead of floating text:
+
+- **Glass card** — dark translucent panel (hairline border, 18px radius,
+  soft shadow) over the blurred frozen scene; reads as one object.
+- **Two-column head** — eyebrow / "Revive?" (light 430 weight) / reason /
+  level line on the left; the four run stats as a right-aligned
+  scoreboard rail (bright values, tiny tracked labels) on the right.
+- **Hairline divider** between the head and the actions.
+- **One-line action row** — gold video CTA (glyph + tiny WATCH AD
+  caption) on the left, Restart Level / End Run grouped as quiet glass
+  buttons on the right; on web (no revive offer) the two buttons center.
+- **Footnote** — the ad note moved below the buttons, tiny and centered;
+  the redundant "Complete a rewarded ad to continue" line was dropped.
+- Short-viewport media query keeps the card inside the screen down to
+  568×320 landscape.
+
+Verified: real web crash screen (card fits, stats rail right-aligned in
+one column, 68px text→button gap, footnote 14px below, blur active, no
+console errors) and the native 3-button card with the built stylesheet
+at 844×390 and 568×320 (fits, one line, gold CTA left, group right) —
+screenshots in `qa/phase11-revive-row/`. Suite 245/245, tsc clean.
+
+## Crash title copy (round 4)
+
+"Revive?" → **"Keep going?"** — "Revive" is a systems word; the rest of
+the screen speaks the game's voice ("THE MOUNTAIN PAUSES", "A fallen
+log caught your wheel"). The new title flows from the reason line and
+the gold WATCH AD button is its direct answer. Verified on the real
+web crash screen (title renders, card fits, no console errors) and the
+native card at 844×390 / 568×320. Suite 245/245, tsc clean.
+
+## Level-completion hold time (playtest feedback)
+
+Entering the safe house auto-advanced after 3.1s — the reward lines
+(glowstones, completion bonus, clean run, backflips, milestone, total)
+came and went before they could be read. The completion card now holds
+for **6.5 seconds** (`levelManager.ts` → `transitions.end
+.completionSeconds`, was 3.1). A press after the existing 1.1s grace
+still continues early ("TAP TO CONTINUE" already fades in at 1.1s), so
+fast readers are never held hostage.
+
+Verified:
+- New regression test (`tests/transition.test.mjs` — "The completion
+  card holds long enough to read the level rewards") drives the real
+  engine through the arrival and asserts the card holds ≥ 6s of game
+  time and still auto-continues. Suite 246/246, tsc clean.
+- Real rendered app (production build): resumed a crafted parked run
+  sitting exactly at the 50,000-point target so the arrival begins
+  immediately — the card renders with all reward lines and the phase
+  machine runs riding → arrival → celebrating (card) → exiting →
+  riding with zero console errors. Wall-clock hold in the headless
+  software renderer stretches (~14.5s at ~4.5fps because the engine
+  clamps frame delta at 0.1s); on a real 60fps device it is the
+  intended ~6.5s. A pixel screenshot of the live card is not capturable
+  in this sandbox (CDP capture deadlocks under the single-process
+  chromium with an active rAF loop) — DOM-level verification above.
+
+## Level-completion card: the data no longer vanishes (round 2)
+
+Root cause found: the previous hold fix (6.5s engine time) was masked by
+the card's CSS animation — `.level-completion` still ran a **3.1s fade**
+with `both` fill, so the card turned invisible at 3.1 seconds and sat
+unseen while the phase ran on. That is the "suddenly the data
+disappeared" the player saw.
+
+Fixes:
+- The card's fade duration is now read **from the engine's own
+  `completionSeconds`** at render time (inline `animationDuration`), so
+  the CSS and the engine hold can never drift apart again.
+- The hold is now **10 seconds** (was 3.1s originally, 6.5s interim);
+  a press after the 1.1s grace still continues early.
+- New keyframes hold full opacity until the end of the span (8%–92%),
+  instead of fading at 75% of a short window.
+- The card now also shows the run's headline numbers — **score /
+  meters / glowstones** — above the reward lines, so there is real data
+  to read while it holds.
+
+Verified in the real rendered app (production build, crafted parked run
+at the exact level target): stats row renders ("50,091 SCORE · 91
+METERS · 0 GLOWSTONES"), reward lines intact, computed card opacity 1.00
+from ~0.25s through ~9.5s with the fade completing at the 10s mark (the
+old build dropped to 0 at 3.1s), phases run clean, zero console errors.
+The regression test now locks the ≥9.5s hold; suite 246/246, tsc clean.

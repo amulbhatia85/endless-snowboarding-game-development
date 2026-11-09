@@ -233,6 +233,26 @@ test('The completion event fires once and a press continues to the next level', 
   assert.equal(edges(phases).filter((phase) => phase === 'celebrating').length, 1, 'still exactly one completion');
 });
 
+test('The completion card holds long enough to read the level rewards', () => {
+  // Playtest fix — the card used to auto-advance after 3.1s, which came and
+  // went before the reward lines (glowstones, completion bonus, clean run,
+  // backflips, milestone, total) could be read. Without a press it must now
+  // hold for a comfortable read; early-press skipping is covered above.
+  const { game } = makeEngine({ save: seedSave(7719, 1) });
+  game.start();
+  driveToArrival(game);
+  const run = game.run;
+  while (run.levelPhase !== 'celebrating') { game.clock += 1 / 120; game.step(1 / 120); }
+  let held = 0;
+  while (run.levelPhase === 'celebrating' && held < 16) {
+    game.clock += 1 / 120;
+    game.step(1 / 120);
+    held += 1 / 120;
+  }
+  assert.equal(run.levelPhase, 'exiting', 'the card still auto-continues without a press');
+  assert.ok(held >= 9.5, `the completion card held for ${held.toFixed(1)}s — readable (was 3.1s)`);
+});
+
 // ───────────────────────── the next level ─────────────────────────
 
 test('Level 2 loads snowy, the rider exits naturally and the score resets', () => {

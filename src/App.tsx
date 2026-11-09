@@ -106,6 +106,15 @@ function BrandMark() {
   );
 }
 
+function VideoIcon() {
+  return (
+    <svg viewBox="0 0 24 18" aria-hidden="true">
+      <rect x="0.9" y="0.9" width="22.2" height="16.2" rx="3.5" fill="none" stroke="currentColor" strokeWidth="1.7" />
+      <path d="M9.6 5.4v7.2l6.3-3.6z" fill="currentColor" />
+    </svg>
+  );
+}
+
 function ArrowIcon() {
   return (
     <svg viewBox="0 0 20 20" aria-hidden="true">
@@ -852,6 +861,12 @@ export default function App() {
 
   const achievements = getAchievements(lifetime);
 
+  // Playtest fix — the completion card's fade animation must span exactly the
+  // engine's celebration hold. They once drifted apart (a 3.1s CSS fade over a
+  // longer hold made the card invisible while the phase still ran), so the
+  // duration is now read from the engine's own level configuration.
+  const completionHoldSeconds = engineRef.current?.levels.current.transitions.end.completionSeconds ?? 10;
+
   const scoreTable = (
     <div className="score-table-wrap">
       <table className="score-table">
@@ -1091,10 +1106,19 @@ export default function App() {
       {screen === 'playing' && hud.level && hud.level.phase !== 'riding' && (
         <div className="level-cinematic" aria-live="polite">
           {hud.level.phase === 'celebrating' && (
-            <div key={hud.level.number} className="level-completion">
+            <div
+              key={hud.level.number}
+              className="level-completion"
+              style={{ animationDuration: `${completionHoldSeconds}s` }}
+            >
               <span className="level-completion-rule" />
               <p>50,000 POINTS · A JOURNEY WELL RIDDEN</p>
               <h2>LEVEL {hud.level.number} COMPLETED</h2>
+              <div className="level-completion-stats" aria-label="Run so far">
+                <span><b>{formatNumber(hud.score)}</b> SCORE</span>
+                <span><b>{formatNumber(hud.distance)}</b> METERS</span>
+                <span><b>{formatNumber(hud.coins)}</b> GLOWSTONES</span>
+              </div>
               {hud.level.reward && (
                 <div className="level-rewards" aria-label="Glowstones earned this level">
                   <span className="reward-line">{hud.level.reward.collected} GLOWSTONES COLLECTED</span>
@@ -1384,30 +1408,41 @@ export default function App() {
         <section className="state-overlay crash-overlay" aria-labelledby="crash-title">
           <div className="state-content crash-content">
             <div className="eyebrow"><span className="eyebrow-dot" />THE MOUNTAIN PAUSES</div>
-            <h2 id="crash-title"><strong>Revive ?</strong></h2>
-            <p className="result-reason">{crashResult.reason}</p>
-            <div className="crash-stats">
-              <span><b>{formatNumber(crashResult.score)}</b> SCORE</span>
-              <span><b>{formatNumber(crashResult.distance)}</b> METERS</span>
-              <span><b>{formatNumber(crashResult.coins)}</b> GLOWSTONES</span>
-              <span><b>{formatNumber(crashResult.speedKmh)}</b> KM/H</span>
+            <div className="crash-head">
+              <div className="crash-copy">
+                <h2 id="crash-title">Keep going?</h2>
+                <p className="result-reason">{crashResult.reason}</p>
+                {crashResult.level && (
+                  <p className="crash-level">LEVEL {crashResult.level.number} · {crashResult.level.name.toUpperCase()}</p>
+                )}
+              </div>
+              <div className="crash-stats">
+                <span><b>{formatNumber(crashResult.score)}</b> SCORE</span>
+                <span><b>{formatNumber(crashResult.distance)}</b> METERS</span>
+                <span><b>{formatNumber(crashResult.coins)}</b> GLOWSTONES</span>
+                <span><b>{formatNumber(crashResult.speedKmh)}</b> KM/H</span>
+              </div>
             </div>
-            {crashResult.level && (
-              <p className="crash-level">LEVEL {crashResult.level.number} · {crashResult.level.name.toUpperCase()}</p>
-            )}
-            {rewardedReady ? (
-              <button className="primary-button revive-button" onClick={watchRewardedRevive} disabled={adBusy}>
-                <span>{adBusy ? 'Opening ad...' : 'Watch Ad & Revive'}</span><span className="button-arrow"><ArrowIcon /></span>
-              </button>
-            ) : (
-              <p className="ad-unavailable">{ads.isNative ? 'Preparing a rewarded ad...' : 'Rewarded ads are available in the Android app.'}</p>
-            )}
-            {adNotice && <p className="ad-notice">{adNotice}</p>}
-            <div className="crash-secondary">
-              <button className="end-run-button" onClick={restartFromCrash} disabled={adBusy}>Restart Level</button>
-              <button className="end-run-button" onClick={endRun} disabled={adBusy}>End Run</button>
+            {/* Playtest fix — redesigned crash card: gold video CTA on the
+                left, Restart Level / End Run grouped right, one line; the ad
+                note moves to a tiny footnote below the actions. */}
+            <div className={rewardedReady ? 'crash-secondary' : 'crash-secondary no-revive'}>
+              {rewardedReady && (
+                <button className="revive-video" onClick={watchRewardedRevive} disabled={adBusy} aria-label="Watch a video to revive this run">
+                  <VideoIcon />
+                  <small>{adBusy ? 'OPENING…' : 'WATCH AD'}</small>
+                </button>
+              )}
+              <div className="crash-secondary-group">
+                <button className="end-run-button" onClick={restartFromCrash} disabled={adBusy}>Restart Level</button>
+                <button className="end-run-button" onClick={endRun} disabled={adBusy}>End Run</button>
+              </div>
             </div>
-            <span className="revive-rule">Complete a rewarded ad to continue this run</span>
+            {(adNotice || !rewardedReady) && (
+              <p className="crash-footnote">
+                {adNotice || (ads.isNative ? 'Preparing a rewarded ad...' : 'Rewarded ads are available in the Android app.')}
+              </p>
+            )}
           </div>
         </section>
       )}

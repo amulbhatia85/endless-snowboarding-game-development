@@ -4,8 +4,21 @@ name: Build Android APK
 # to the branch as Afterglow.apk (the repo's established artifact slot).
 # Runs on manual dispatch and on pushes that touch the game code, the
 # Android project or the build config.
+# The final step pushes the rebuilt APK back to this branch, so the token
+# needs explicit write access (the repo default is read-only).
+permissions:
+  contents: write
+
 on:
   workflow_dispatch:
+  # Fires only when this workflow file itself changes (kept so the build
+  # can be regenerated from this branch on demand; game-code pushes do
+  # NOT trigger it — dispatch from a non-default branch is not supported).
+  push:
+    branches:
+      - arena/14aaea8f-endless-snowboarding-game-deve
+    paths:
+      - .github/workflows/build-android.yml
 
 jobs:
   apk:
