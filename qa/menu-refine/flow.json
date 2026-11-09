@@ -1,0 +1,51 @@
+{
+ "errors": [],
+ "riding": {
+  "cls": "game-app screen-playing",
+  "d": 49,
+  "crashCard": false,
+  "results": false
+ },
+ "paused": {
+  "cls": "game-app screen-paused",
+  "d": -1,
+  "crashCard": false,
+  "results": false
+ },
+ "afterResume": {
+  "cls": "game-app screen-crashed",
+  "d": -1,
+  "crashCard": true,
+  "results": false
+ },
+ "crashCardDetails": {
+  "title": "Keep going?",
+  "reason": "A fallen log caught your wheel.",
+  "meters": "822 SCORE72 METERS3 GLOWSTONES95 KM/H",
+  "buttons": [
+   "Restart Level",
+   "End Run"
+  ]
+ },
+ "afterEndRun": {
+  "cls": "game-app screen-gameover",
+  "d": -1,
+  "crashCard": false,
+  "results": true
+ },
+ "resultsDetails": {
+  "title": "Every run leaves a trace.",
+  "reason": "A fallen log caught your wheel.",
+  "buttons": [
+   "Ride again",
+   "Main Menu"
+  ]
+ },
+ "afterRideAgain": {
+  "cls": "game-app screen-playing",
+  "d": 3,
+  "crashCard": false,
+  "results": false
+ },
+ "rideAgainWorks": true
+}

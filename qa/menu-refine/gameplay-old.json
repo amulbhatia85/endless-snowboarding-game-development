@@ -1,0 +1,32 @@
+{
+ "runs": [
+  {
+   "attempt": 1,
+   "maxDistance": 60,
+   "stalledAt": 60,
+   "crashed": false,
+   "reason": null,
+   "restarted": false,
+   "restartDistance": 0,
+   "errors": []
+  },
+  {
+   "attempt": 2,
+   "maxDistance": 203,
+   "stalledAt": 203,
+   "crashed": false,
+   "reason": null,
+   "restarted": false,
+   "restartDistance": 0,
+   "errors": []
+  }
+ ],
+ "errors": [],
+ "verdict": {
+  "hudAdvanced": true,
+  "endedOrHealthy": true,
+  "restartWorks": true,
+  "noPageErrors": true,
+  "pinnedQuirk": true
+ }
+}

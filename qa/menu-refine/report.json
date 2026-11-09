@@ -1,0 +1,141 @@
+{
+ "landscapeMenu": {
+  "titleVisible": true,
+  "titleLeft": 31
+ },
+ "shotLandscapeMenu": true,
+ "pages": {
+  "achievements": {
+   "panelRemoved": true,
+   "noHorizontalOverflow": true,
+   "titleVisible": true,
+   "backVisible": true,
+   "noTitleOverlap": true,
+   "scroller": "page",
+   "backStickyAfterScroll": {
+    "before": 92,
+    "after": 92,
+    "stayed": true,
+    "clearsTopbar": true,
+    "scrolledTo": 506,
+    "max": 506
+   }
+  },
+  "rewards": {
+   "panelRemoved": true,
+   "noHorizontalOverflow": true,
+   "titleVisible": true,
+   "backVisible": true,
+   "noTitleOverlap": true,
+   "scroller": "page",
+   "backStickyAfterScroll": {
+    "before": 92,
+    "after": 92,
+    "stayed": true,
+    "clearsTopbar": true,
+    "scrolledTo": 825,
+    "max": 825
+   }
+  },
+  "leaderboard": {
+   "panelRemoved": true,
+   "noHorizontalOverflow": true,
+   "titleVisible": true,
+   "backVisible": true,
+   "noTitleOverlap": true,
+   "scroller": "page",
+   "backStickyAfterScroll": {
+    "before": 92,
+    "after": 92,
+    "stayed": true,
+    "clearsTopbar": true,
+    "scrolledTo": 154,
+    "max": 154
+   }
+  },
+  "how": {
+   "panelRemoved": true,
+   "noHorizontalOverflow": true,
+   "titleVisible": true,
+   "backVisible": true,
+   "noTitleOverlap": true,
+   "scroller": "page",
+   "backStickyAfterScroll": {
+    "before": 92,
+    "after": 92,
+    "stayed": true,
+    "clearsTopbar": true,
+    "scrolledTo": 363,
+    "max": 363
+   }
+  },
+  "settings": {
+   "panelRemoved": true,
+   "noHorizontalOverflow": true,
+   "titleVisible": true,
+   "backVisible": true,
+   "noTitleOverlap": true,
+   "scroller": "page",
+   "backStickyAfterScroll": {
+    "before": 92,
+    "after": 92,
+    "stayed": true,
+    "clearsTopbar": true,
+    "scrolledTo": 361,
+    "max": 361
+   }
+  },
+  "credits": {
+   "panelRemoved": true,
+   "noHorizontalOverflow": true,
+   "titleVisible": true,
+   "backVisible": true,
+   "noTitleOverlap": true,
+   "scroller": "page",
+   "backStickyAfterScroll": {
+    "before": 92,
+    "after": 92,
+    "stayed": true,
+    "clearsTopbar": true,
+    "scrolledTo": 154,
+    "max": 154
+   },
+   "credits": {
+    "found": true,
+    "scrollable": true,
+    "autoAdvanced": true,
+    "advancedBy": 59,
+    "pausedByInteraction": true,
+    "max": 213
+   }
+  }
+ },
+ "shot_achievements": true,
+ "shot_rewards": true,
+ "shot_leaderboard": true,
+ "shot_how": true,
+ "shot_settings": true,
+ "shot_credits": true,
+ "landscapeErrors": [],
+ "portraitMenu": {
+  "navFits": true,
+  "titleVisible": true
+ },
+ "portraitAchievements": {
+  "noHoriz": true,
+  "backVisible": true,
+  "panelRemoved": true
+ },
+ "shotPortraitAchievements": true,
+ "safeArea": {
+  "introLeft": true,
+  "topbarLeft": true,
+  "menuPageLeft": true,
+  "menuPageRight": true
+ },
+ "oldPanel": {
+  "bg": "rgba(10, 23, 37, 0.6)",
+  "blur": "none"
+ },
+ "shotOldAchievements": true
+}
