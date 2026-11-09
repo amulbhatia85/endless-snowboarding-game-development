@@ -1395,7 +1395,7 @@ export default function App() {
             <div className="eyebrow"><span className="eyebrow-dot" />THE MOUNTAIN PAUSES</div>
             <div className="crash-head">
               <div className="crash-copy">
-                <h2 id="crash-title">Revive?</h2>
+                <h2 id="crash-title">Keep going?</h2>
                 <p className="result-reason">{crashResult.reason}</p>
                 {crashResult.level && (
                   <p className="crash-level">LEVEL {crashResult.level.number} · {crashResult.level.name.toUpperCase()}</p>

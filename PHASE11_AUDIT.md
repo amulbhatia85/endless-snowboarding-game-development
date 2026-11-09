@@ -601,3 +601,12 @@ one column, 68px text→button gap, footnote 14px below, blur active, no
 console errors) and the native 3-button card with the built stylesheet
 at 844×390 and 568×320 (fits, one line, gold CTA left, group right) —
 screenshots in `qa/phase11-revive-row/`. Suite 245/245, tsc clean.
+
+## Crash title copy (round 4)
+
+"Revive?" → **"Keep going?"** — "Revive" is a systems word; the rest of
+the screen speaks the game's voice ("THE MOUNTAIN PAUSES", "A fallen
+log caught your wheel"). The new title flows from the reason line and
+the gold WATCH AD button is its direct answer. Verified on the real
+web crash screen (title renders, card fits, no console errors) and the
+native card at 844×390 / 568×320. Suite 245/245, tsc clean.
