@@ -4,7 +4,7 @@ import { moduleUrl } from './loadTypeScript.mjs';
 
 // Phase 7 — rewards, coins, abilities and unlockables.
 
-const { LEVEL_SAVE_KEY } = await import(moduleUrl('src/game/levelManager.ts'));
+const { LEVEL_SAVE_KEY, LEVEL_TARGET_SCORE } = await import(moduleUrl('src/game/levelManager.ts'));
 const { SnowGameEngine } = await import(moduleUrl('src/game/engine.ts'));
 const { Wallet, REWARD_CONFIG } = await import(moduleUrl('src/game/wallet.ts'));
 const {
@@ -74,7 +74,7 @@ function beginRun(game) {
 function driveToArrival(game) {
   const run = game.run;
   run.elapsed = Math.max(5, run.elapsed);
-  run.bonus += 50_000;
+  run.bonus += LEVEL_TARGET_SCORE;
   game.step(0);
   assert.equal(run.levelPhase, 'approach');
   return run.houses[run.houses.length - 1];

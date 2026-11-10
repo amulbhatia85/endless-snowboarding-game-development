@@ -1,7 +1,11 @@
 import { ObstaclePlanner, OBSTACLE_PATTERNS, patternAvailability, patternRating, validPlacementMetadata, type PlacementMetadata, type PlacementRejection } from './obstaclePlanner';
 import { OBSTACLE_REGISTRY, obstacleReady, swingingLogPose, iciclePose, branchPose, snowballPose, platformBob, type ObstacleId } from './obstacleRegistry';
-import { flipProgress } from './riderPhysics';
 import { BICYCLE_PHYSICS, TerrainWorld, type TerrainOrigin } from './terrain';
+import { MotoBody, MOTO_PHYSICS, type Surface, type WheelContact, type MotoControls } from './motoPhysics';
+import {
+  planTrackFeature, featureSpacing, featureContacts, nearFeatureLine, traceCurve, curvePoint,
+  FEATURE_UNLOCK,
+  type TrackFeature, type TrackFeatureId, type SegmentContact, curveClosest } from './trackSegments';
 import { EnvironmentManager, decorationOverlapsGameplay, type EnvironmentView, type Palette } from './environment';
 import type { EnvironmentTheme } from './levelManager';
 import type { WeatherEffectConfig } from './weather';
@@ -110,6 +114,10 @@ interface Obstacle {
   offset?: number;
   phase?: number;
   variant?: number;
+  /** Phase 12 — marks a chasm whose deck is a track feature curve. */
+  track?: boolean;
+  /** Phase 12 — the track feature this chasm belongs to (traceability). */
+  featureGap?: string;
   pulled?: { x: number; y: number };
   plan?: PlacementMetadata;
 }
@@ -181,6 +189,10 @@ interface RunState {
   powerIndex: number;
   /** Phase 5 pacing memory: recently scheduled pattern ids (oldest first). */
   recentPatterns?: string[];
+  /** Phase 12 — planned track segments (curves, loops, arcs) ahead of the rider. */
+  trackFeatures?: TrackFeature[];
+  trackNextX?: number;
+  trackLastId?: TrackFeatureId | null;
   /** Phase 11 — scheduled scenery set-pieces ahead of the rider. */
   magnetUntil: number;
   doubleUntil: number;
@@ -285,14 +297,7 @@ interface FinishHouse {
 }
 
 const TAU = Math.PI * 2;
-const BIKE_SCALE = 0.5;
-const WHEEL_RADIUS = 12;
-const WHEEL_Y = -8;
-const REAR_AXLE = -25;
-const FRONT_AXLE = 25;
 const WHEEL_CONTACT_Y = 5;
-/** Phase 10A — hoisted so the render/loop paths allocate no per-frame arrays. */
-const WHEEL_AXLES: readonly number[] = [REAR_AXLE, FRONT_AXLE];
 /** Phase 10C — hard particle ceiling so bursts can never snowball memory. */
 const MAX_PARTICLES = 400;
 /** Phase 10C — measured auto-quality thresholds (ms of engine work per frame). */
@@ -311,14 +316,12 @@ const AUTO_QUALITY_MISSED_MS = 25;
  */
 const CANVAS_FONT_STACK = '"Avenir Next", Avenir, "Segoe UI", sans-serif';
 const canvasFont = (weight: number, size: number) => `${weight} ${size}px ${CANVAS_FONT_STACK}`;
-const FLIP_HOLD_SECONDS = BICYCLE_PHYSICS.flipHoldSeconds;
 const START_PAUSE = 1;
 const START_ROLLOUT = 2.2;
 
 const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
 const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
 /** Wrapped angle difference in (-π, π] — used by the ice slip lean. */
-const shortAngleDelta = (angle: number) => Math.atan2(Math.sin(angle), Math.cos(angle));
 
 function hash(value: number): number {
   const n = Math.sin(value * 127.1 + 311.7) * 43758.5453123;
@@ -368,13 +371,37 @@ export class SnowGameEngine {
   private clock = 0;
   private run: RunState | null = null;
   private held = false;
-  private pressedAt = 0;
   private jumpQueued = false;
   private parked = false;
   private graphicsQuality: GraphicsQuality = 'auto';
   private bike: BikeEntry = BIKES[0];
   private character: RiderEntry = RIDERS[0];
   private trail: TrailEntry = TRAILS[0];
+  /** Phase 12 — the motorcycle rigid body that drives `run.rider`. */
+  private readonly body = new MotoBody();
+  /** Brake / lean control state (throttle reuses the classic press-and-hold). */
+  private brakeHeld = false;
+  private leanDir = 0;
+  /** The ramp object the body rode last frame (lip auto-launch memory). */
+  private lastRamp?: Obstacle;
+  /** The kicker/gap-run lip the body last rode (feature auto-hop memory). */
+  private lastFeatureLip?: number;
+  /** Rider-field values the physics itself wrote last frame (external-edit detection). */
+  private lastMappedSpeed = -1;
+  private lastMappedX = -1;
+  private lastMappedY = -1;
+  private lastMappedRotation = -1;
+  private lastMappedVy: number | null = null;
+  private lastMappedOmega: number | null = null;
+  /** One introduction popup per feature kind per level. */
+  private announcedFeatures = new Set<TrackFeatureId>();
+  /** Stable surface view over the current run (ground ∪ ramps ∪ bridges ∪ track curves). */
+  private readonly surface: Surface = {
+    forEachContact: (x, y, r, visit) => {
+      const run = this.run;
+      if (run) this.forEachSurfaceContact(run, x, y, r, visit);
+    },
+  };
   /** Mission rotation slot. Seeded from the journey on the first run so
    *  identical saves get identical mission sequences (and therefore identical
    *  score-driven planning); cosmetics stay free to use Math.random. */
@@ -450,6 +477,9 @@ export class SnowGameEngine {
   private fairnessViolations: FeasibilityViolation[] = [];
   /** Fixed terrain-complexity sampling window: generation must not depend on
    *  the viewport, or wide and narrow screens would diverge (see tests). */
+  /** Mild, readable patterns that open every level (weighting hint only). */
+  private static readonly OPENING_PATTERNS = ['single-rock', 'single-root', 'single-log', 'log-recovery', 'single-tree'];
+
   private static readonly COMPLEXITY_WINDOW = 2000;
 
   // Phase 4 — dynamic environment & weather. Rendering of skies, parallax,
@@ -678,6 +708,9 @@ export class SnowGameEngine {
       nextPowerX: 760,
       powerIndex: 0,
       recentPatterns: [],
+      trackFeatures: [],
+      trackNextX: 2400,
+      trackLastId: null,
       magnetUntil: 0,
       doubleUntil: 0,
       shield: false,
@@ -709,6 +742,11 @@ export class SnowGameEngine {
     };
     this.nextMission = (this.missionSlotFor(level.seed) + 1) % MISSIONS.length;
     this.parked = false;
+    this.announcedFeatures.clear();
+    this.lastRamp = undefined;
+    this.brakeHeld = false;
+    this.leanDir = 0;
+    this.syncBodyFromRider();
 
     this.held = false;
     this.jumpQueued = false;
@@ -732,13 +770,26 @@ export class SnowGameEngine {
     if (this.run.levelPhase !== 'riding') return;
     if (!this.held) {
       this.jumpQueued = true;
-      this.pressedAt = this.clock;
     }
     this.held = true;
   }
 
   release(): void {
     this.held = false;
+  }
+
+  /** Phase 12 — brake and lean controls (keyboard keys + touch buttons). */
+  brakePress(): void {
+    this.brakeHeld = true;
+  }
+
+  brakeRelease(): void {
+    this.brakeHeld = false;
+  }
+
+  /** dir < 0 leans back (backflips), dir > 0 leans forward. */
+  setLean(dir: number): void {
+    this.leanDir = Math.max(-1, Math.min(1, dir));
   }
 
   togglePause(): void {
@@ -787,6 +838,7 @@ export class SnowGameEngine {
     if (!this.hasParkedRun || !this.run) return;
     this.parked = false;
     this.lastFrame = 0;
+    this.syncBodyFromRider();
     this.setStatus('playing');
     this.callbacks.onHud(this.makeHud(this.run));
   }
@@ -892,9 +944,18 @@ export class SnowGameEngine {
     }
     const recent = this.run?.recentPatterns ?? [];
     lines.push(`RECENT PATTERNS ${recent.length ? recent.join(' → ') : '— (not riding)'}`);
+    // Phase 12 — track feature schedule for this level.
+    const unlockedFeatures = (Object.keys(FEATURE_UNLOCK) as TrackFeatureId[]).filter((id) => level.number >= FEATURE_UNLOCK[id]);
+    lines.push(`TRACK FEATURES ${unlockedFeatures.join(', ')}`);
     // Phase 9D — special-event schedule for this level (deterministic from
     // the level seed + start x; dev previews never touch saved progress).
     const isCurrentLevel = this.run && this.levels.current.number === level.number;
+    if (isCurrentLevel) {
+      const counts = new Map<TrackFeatureId, number>();
+      for (const feature of this.run?.trackFeatures ?? []) counts.set(feature.id, (counts.get(feature.id) ?? 0) + 1);
+      const planned = [...counts.entries()].map(([id, count]) => `${id}×${count}`).join(' · ');
+      lines.push(`TRACK PLANNED ${planned || 'none yet'} · next @ ${Math.round(this.run?.trackNextX ?? 0)}`);
+    }
     const eventReport = this.events.report();
     const windows = isCurrentLevel
       ? eventReport.windows
@@ -1070,6 +1131,8 @@ export class SnowGameEngine {
     this.held = false;
     this.jumpQueued = false;
     this.lastFrame = 0;
+    this.lastRamp = undefined;
+    this.syncBodyFromRider();
     this.burst(run, rider.x, rider.y, 18, '#ffe3a9', 135, -95);
     this.popup(run, rider.x, rider.y - 62, 'ONE MORE CHANCE', '#ffe3a9');
     this.populateAhead(run);
@@ -1412,6 +1475,76 @@ export class SnowGameEngine {
         !isDangerousObstacle(object) || object.x <= run.rider.x + this.width);
     }
 
+    // Phase 12 — track features (curved kickers, ramp gaps, suspended arcs,
+    // C-bowls, loops) claim the far-ahead spans first, seeded per level, so
+    // generation stays deterministic across screen sizes. The obstacle
+    // planner then reserves around every claimed span.
+    run.trackFeatures ??= [];
+    run.trackNextX ??= run.levelStartX + 2400;
+    const featureHorizon = run.rider.x + this.width * 2.2 + 700;
+    while (run.trackNextX < featureHorizon && progress < 0.92 && !directive.safeApproach) {
+      const random = createLevelRandom(this.levels.current.seed ^ Math.floor(run.trackNextX) ^ 0x7ba11);
+      const plan = planTrackFeature({
+        level: this.levels.current.number,
+        startX: run.trackNextX,
+        groundAt: (x) => this.terrainAt(x),
+        random,
+        lastId: run.trackLastId ?? null,
+        busy: (from, to) => this.spanBusy(run, from, to),
+      });
+      if (!plan) {
+        run.trackNextX += 340;
+        continue;
+      }
+      const feature = plan.feature;
+      run.trackFeatures.push(feature);
+      run.trackLastId = feature.id;
+      if (feature.gap) {
+        // The chasm under a track feature joins the object stream as a gap
+        // with full placement metadata (the audit contract every hazard
+        // honours) plus a traceability marker: its geometry is certified by
+        // the feature's own design (curve entry, speed hint, auto-hop), not
+        // by the standalone hazard gap validator.
+        const gapObject: Obstacle = {
+          kind: 'gap',
+          x: feature.gap.x,
+          width: feature.gap.width,
+          bridged: feature.gap.bridged,
+          featureGap: feature.id,
+          plan: {
+            patternId: 'small-gap',
+            obstacleId: 'gap',
+            takeoff: { start: feature.gap.x - 140, end: feature.gap.x },
+            landing: { start: feature.gap.x + feature.gap.width, end: feature.gap.x + feature.gap.width + 140 },
+            clearUntil: feature.gap.x + feature.gap.width + 140,
+            warningStart: feature.gap.x - 520,
+            spacing: 300,
+          },
+        };
+        if (feature.gap.bridged) gapObject.track = true;
+        run.objects.push(gapObject);
+      }
+      for (const coin of feature.coins ?? []) {
+        // Feature coins ride their curves, but only where the result stays
+        // inside the classic glowstone reachability window (38–62 px above
+        // the terrain): low curve haunches would hug the ground, and tall
+        // crests would float beyond a normal jump — those spots are skipped.
+        const offset = this.terrainAt(coin.x) - coin.y;
+        if (offset >= 38 && offset <= 62) {
+          run.objects.push({ kind: 'coin', x: coin.x, offset, phase: random() * TAU });
+        }
+      }
+      if (FEATURE_UNLOCK[feature.id] === this.levels.current.number && !this.announcedFeatures.has(feature.id)) {
+        this.announcedFeatures.add(feature.id);
+        this.popup(run, feature.x0, this.terrainAt(feature.x0) - 132, `NEW · ${feature.intro ?? ''}`, '#9fe8ff');
+      }
+      run.hazardClearUntil = Math.max(run.hazardClearUntil ?? 0, feature.x1 + plan.clearAfter);
+      run.trackNextX = plan.endX + plan.clearAfter + featureSpacing(this.levels.current.number, random);
+    }
+    if (run.trackFeatures.length && run.trackFeatures[0].x1 < run.rider.x - this.width * 1.2) {
+      run.trackFeatures = run.trackFeatures.filter((feature) => feature.x1 > run.rider.x - this.width * 1.2);
+    }
+
     while (run.nextCoinX < ahead) {
       const start = run.nextCoinX;
       // Phase 9D — a glowstone trail event densifies the coin pipeline while
@@ -1430,7 +1563,9 @@ export class SnowGameEngine {
         // Phase 7 — never drop a glowstone inside a hazard's collision space;
         // arcs simply skip those spots (still reachable by normal riding and
         // small jumps, never inside rocks, trees or logs).
-        if (!this.coinBlocked(run, coinX, coinOffset)) {
+        // Phase 12 — the regular pipeline also yields inside track features:
+        // feature coins ride the curves themselves.
+        if (!this.featureSpanAt(run, coinX) && !this.coinBlocked(run, coinX, coinOffset)) {
           run.objects.push({
             kind: 'coin',
             x: coinX,
@@ -1467,11 +1602,18 @@ export class SnowGameEngine {
       // Phase 11 — level openings cap recovery (event or not) so every level
       // starts with something to ride within ~1.5 kpx; the events
       // themselves keep their designed recovery behaviour unchanged.
+      // Phase 12 — track features claim the opening too (a kicker's clear
+      // corridor can push the first free slot past 2.2 kpx), so the opening
+      // guarantee extends past the opening corridor and any clear zone set
+      // before the level really started, and the cap is tight: the first
+      // rideable thing after the opening is a placement, not another empty
+      // stretch.
       const foldedRecovery = eventGameplay.eventId
         ? clamp(lerp(lerp(directive.recoveryChance, 1, eventGameplay.calm), 0.12, eventGameplay.hazardFocus), 0, 1)
         : directive.recoveryChance;
-      const openingRecovery = run.nextHazardX < run.levelStartX + 2200
-        ? Math.min(foldedRecovery, 0.25)
+      const openingUntil = Math.max(run.levelStartX + 2200, Math.min(run.hazardClearUntil ?? 0, run.levelStartX + 3400) + 600);
+      const openingRecovery = run.nextHazardX < openingUntil
+        ? Math.min(foldedRecovery, 0.05)
         : foldedRecovery;
       const planningDirective = eventGameplay.eventId
         ? {
@@ -1505,11 +1647,22 @@ export class SnowGameEngine {
         reserved: [
           { start: run.levelStartX - 120, end: run.levelStartX + 640 },
           ...run.houses.map(house => ({ start: house.x - 300, end: house.x + 300 })),
+          ...(run.trackFeatures ?? []).map(feature => ({ start: feature.x0 - 280, end: feature.x1 + 280 })),
         ],
         nearby: run.objects.filter(object => ['rock', 'log', 'tree', 'gap', 'ramp', 'swinging-log', 'root', 'fence', 'ice', 'icicle', 'snowball', 'branch'].includes(object.kind)),
         directive: planningDirective,
         recentPatterns: run.recentPatterns,
-        hint: eventGameplay.prefer.length ? { prefer: eventGameplay.prefer } : undefined,
+        hint: eventGameplay.prefer.length
+          ? { prefer: eventGameplay.prefer }
+          : run.nextHazardX < run.levelStartX + 4500 && !(run.recentPatterns ?? []).some(id => id !== 'recovery')
+            // Phase 12 — until the level's first real placement, openings
+            // prefer a readable mild hazard (single rock/root/log/tree), so
+            // the first thing a rider meets is an obstacle to jump, not a
+            // feature corridor, an empty stretch or a gap. Validation,
+            // conflicts and spacing are untouched — only the weighting
+            // changes, exactly like the event hints.
+            ? { prefer: SnowGameEngine.OPENING_PATTERNS }
+            : undefined,
       });
       run.objects.push(...plan.obstacles);
       // Phase 7 — coins that now sit inside a newly placed hazard's collision
@@ -1558,12 +1711,42 @@ export class SnowGameEngine {
     return run.objects.find((object) => object.kind === 'ramp' && x >= object.x && x < object.x + 100);
   }
 
+  /** Phase 12 — true when x sits inside any track feature span (with margin). */
+  private featureSpanAt(run: RunState, x: number, margin = 60): boolean {
+    return (run.trackFeatures ?? []).some((feature) => x > feature.x0 - margin && x < feature.x1 + margin);
+  }
+
+  /** Phase 12 — would a feature span [from, to] collide with anything already
+   * claimed (hazards, bridges, gaps, powers, houses, other features, event
+   * set-piece windows) or the level opening? */
+  private spanBusy(run: RunState, from: number, to: number): boolean {
+    if (from < run.levelStartX + 2100) return true;
+    for (const house of run.houses) {
+      if (to > house.x - 380 && from < house.x + 380) return true;
+    }
+    for (const object of run.objects) {
+      if (object.kind === 'coin') continue;
+      const width = object.kind === 'ramp' ? 100 : object.width ?? (object.kind === 'ice' ? 140 : 46);
+      if (to > object.x - 90 && from < object.x + width + 90) return true;
+    }
+    for (const feature of run.trackFeatures ?? []) {
+      if (to > feature.x0 - 170 && from < feature.x1 + 170) return true;
+    }
+    const event = this.events.gameplayAt((from + to) / 2);
+    if (event.eventId && event.intensity > 0.35) return true;
+    return false;
+  }
+
   /**
    * Phase 7 — true when a glowstone at x would sit inside a hazard: within a
    * collision obstacle's radius plus padding, or over an unbridged gap's span.
    * Ramps and bridges are safe to ride, so coins above them stay.
    */
   private coinBlocked(run: RunState, x: number, offset = 0): boolean {
+    // Phase 12 — glowstones pinned to a track feature's riding line are safe
+    // by construction (the line is the ridable surface), even over a chasm.
+    const coinY = this.terrainAt(x) - offset;
+    if (run.trackFeatures?.some((feature) => nearFeatureLine(feature, x, coinY, 46))) return false;
     return run.objects.some((object) => {
       if (object.kind === 'gap') {
         if (object.bridged) return false;
@@ -1588,22 +1771,110 @@ export class SnowGameEngine {
     });
   }
 
+  /**
+   * Phase 12 — ramp surfaces are smooth Bézier kickers (gentle entry, curved
+   * exit) instead of straight planks. Entry and exit heights are unchanged so
+   * every placement validator keeps reading the same world.
+   */
   private rampSurface(ramp: Obstacle, x: number): number {
-    return lerp(this.terrainAt(ramp.x), this.terrainAt(ramp.x + 100) - 38, (x - ramp.x) / 100);
+    const t = clamp((x - ramp.x) / 100, 0, 1);
+    const u = 1 - t;
+    // Normalized curve: y goes 0 → −1 with a ~0.58 exit slope.
+    const curve = u * u * u * 0 + 3 * u * u * t * 0.05 + 3 * u * t * t * 0.634 + t * t * t;
+    return lerp(this.terrainAt(ramp.x), this.terrainAt(ramp.x + 100) - 38, curve);
   }
 
-  private rampAngle(ramp: Obstacle): number {
-    return Math.atan2(this.rampSurface(ramp, ramp.x + 100) - this.rampSurface(ramp, ramp.x), 100);
+  /**
+   * Phase 12 — surface contacts for the motorcycle wheels: track feature
+   * curves first (loops, bowls, arcs — the collision is the closest point on
+   * the exact curve), then the heightfield ground (ramps, bridge decks,
+   * terrain) unless the spot is an open chasm.
+   */
+  private forEachSurfaceContact(run: RunState, x: number, y: number, r: number, visit: (contact: WheelContact) => void): void {
+    const features = run.trackFeatures;
+    if (features && features.length) {
+      for (const feature of features) {
+        if (x < feature.x0 - 90 || x > feature.x1 + 90) continue;
+        featureContacts(feature, x, y, r, (contact: SegmentContact) => {
+          visit({ px: contact.x, py: contact.y, nx: contact.nx, ny: contact.ny, depth: contact.depth, tx: contact.tx, ty: contact.ty, feature: true, traction: 1, t: contact.t });
+        });
+      }
+    }
+    const chasm = this.gapAt(run, x, true);
+    if (chasm) {
+      // A bridge deck replaces the ground (moving platforms bob).
+      if (chasm.bridged && !chasm.track) {
+        const deckY = this.bridgeDeck(chasm, x) + this.platformDeckOffset(run, chasm);
+        const aheadY = this.bridgeDeck(chasm, Math.min(chasm.x + (chasm.width ?? 1), x + 6)) + this.platformDeckOffset(run, chasm);
+        const behindY = this.bridgeDeck(chasm, Math.max(chasm.x, x - 6)) + this.platformDeckOffset(run, chasm);
+        this.visitGroundContact(x, y, r, deckY, (aheadY - behindY) / 12, visit);
+      }
+      return;
+    }
+    const ramp = this.rampAt(run, x);
+    if (ramp) {
+      this.visitGroundContact(x, y, r, this.rampSurface(ramp, x), (this.rampSurface(ramp, x + 6) - this.rampSurface(ramp, x - 6)) / 12, visit);
+      return;
+    }
+    this.visitGroundContact(x, y, r, this.terrainAt(x), (this.terrainAt(x + 6) - this.terrainAt(x - 6)) / 12, visit);
+  }
+
+  /**
+   * True when a track-segment curve is close enough to matter for the
+   * chassis and is NOT flush with the streamed terrain — ramps, arcs, bowl
+   * interiors, loop ribbons. Ground-flush curves (the buried entry/exit
+   * tails that hand riders between terrain and features) do not count: the
+   * classic ground pin keeps applying through them.
+   */
+  private ridingRaisedCurve(run: RunState): boolean {
+    const { x, y, angle } = this.body;
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    for (const offset of [-22, 22]) {
+      const wx = x + offset * cos - 6 * sin;
+      const wy = y + offset * sin + 6 * cos;
+      for (const feature of run.trackFeatures ?? []) {
+        if (wx <= feature.x0 - 24 || wx >= feature.x1 + 24) continue;
+        for (const shape of feature.curves) {
+          const closest = curveClosest(shape, wx, wy);
+          // Wheel reach: wheel radius + ribbon half thickness + slack.
+          if (closest.d2 > 21 * 21) continue;
+          if (Math.abs(closest.y - this.terrainAt(closest.x)) > 3) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private visitGroundContact(x: number, y: number, r: number, groundY: number, slope: number, visit: (contact: WheelContact) => void): void {
+    const length = Math.hypot(1, slope);
+    const depth = r + (y - groundY) / length;
+    if (depth <= 0) return;
+    visit({
+      px: x,
+      py: groundY,
+      nx: slope / length,
+      ny: -1 / length,
+      depth,
+      tx: 1 / length,
+      ty: slope / length,
+      feature: false,
+      traction: 1,
+    });
   }
 
   private jump(run: RunState): void {
     const rider = run.rider;
+    // Phase 12 — the hop fires from the motorcycle body: the vertical impulse
+    // family is identical to the classic jump, so validated obstacle arcs
+    // keep their exact reach.
+    this.body.hop(Math.max(0, this.body.vx));
     rider.grounded = false;
-    rider.vy = -(BICYCLE_PHYSICS.jumpVelocity + Math.min(BICYCLE_PHYSICS.maxJumpBoost, rider.speed * BICYCLE_PHYSICS.jumpSpeedFactor));
+    rider.vy = this.body.vy;
     rider.airTime = 0;
     rider.totalSpin = 0;
     rider.flipElapsed = undefined;
-    rider.angularVelocity = 0;
+    rider.angularVelocity = this.body.omega;
     // Phase 10A — the forks extend slightly as the wheels leave the ground.
     this.suspensionVelocity -= 1.4;
     run.shake = Math.max(run.shake, 1.6);
@@ -1611,8 +1882,47 @@ export class SnowGameEngine {
     this.emit({ type: 'jump' });
   }
 
-  private flipHoldTime(rider: Rider): number {
-    return this.held ? Math.min(rider.airTime, this.clock - this.pressedAt) : 0;
+  /** Rebuilds the physics body from the canonical rider fields (level starts,
+   * revives, parked-run resumes and checkpoint restores). */
+  /**
+   * Compatibility contract: the canonical `rider` fields are the game's
+   * public state. Anything outside the physics that edited them since the
+   * last frame (developer tools, harnesses, scene scaffolding) is adopted
+   * by the body before stepping, so a write-then-step round trip behaves
+   * exactly like the classic single-state model.
+   */
+  private adoptExternalRiderEdits(rider: Rider): void {
+    if (this.lastMappedX < 0) return;
+    if (rider.x !== this.lastMappedX || rider.y !== this.lastMappedY) {
+      this.body.x = rider.x;
+      this.body.y = rider.y - 8;
+    }
+    if (rider.speed !== this.lastMappedSpeed) this.body.vx = Math.max(0, rider.speed);
+    if (this.lastMappedVy !== null && rider.vy !== this.lastMappedVy) this.body.vy = rider.vy;
+    if (rider.rotation !== this.lastMappedRotation) this.body.angle = rider.rotation;
+    if (this.lastMappedOmega !== null && rider.angularVelocity !== this.lastMappedOmega) this.body.omega = rider.angularVelocity;
+    if (rider.grounded && !this.body.grounded) {
+      this.body.grounded = true;
+      this.body.rearGrounded = true;
+      this.body.frontGrounded = true;
+    }
+  }
+
+  private syncBodyFromRider(): void {
+    const rider = this.run?.rider;
+    if (!rider) return;
+    this.body.place(rider.x, rider.y - 8, rider.rotation, Math.max(0, rider.speed), rider.vy, rider.angularVelocity);
+    this.body.grounded = rider.grounded;
+    this.body.rearGrounded = rider.grounded;
+    this.body.frontGrounded = rider.grounded;
+    this.lastRamp = undefined;
+    this.lastFeatureLip = undefined;
+    this.lastMappedSpeed = rider.speed;
+    this.lastMappedX = rider.x;
+    this.lastMappedY = rider.y;
+    this.lastMappedRotation = rider.rotation;
+    this.lastMappedVy = rider.vy;
+    this.lastMappedOmega = rider.angularVelocity;
   }
 
   private riderScreenPosition(run: RunState): number {
@@ -1643,101 +1953,162 @@ export class SnowGameEngine {
 
     const queued = this.jumpQueued;
     this.jumpQueued = false;
-    if (queued && rider.grounded) this.jump(run);
+    this.adoptExternalRiderEdits(rider);
+    if (queued && this.body.grounded) this.jump(run);
+
+    // Phase 12 — the motorcycle body. Controls: press-and-hold is throttle on
+    // the ground (the classic tap still hops); in the air the same hold leans
+    // back, so the flip muscle memory carries over. Brake and lean come from
+    // the new key / touch controls.
+    const wasAirborne = !this.body.grounded;
+    const controls: MotoControls = {
+      throttle: this.held ? 1 : 0,
+      brake: this.brakeHeld ? 1 : 0,
+      lean: wasAirborne && this.held ? clamp(this.leanDir - 0.85, -1, 1) : this.leanDir,
+      flipHold: wasAirborne && this.held,
+    };
+    const difficulty = clamp(rider.x / 26000, 0, 1);
+
+    // Classic ramp-lip auto-launch: leaving a validated ramp object applies
+    // the standard hop impulse so every ramp-gap combo stays as reachable as
+    // the validators certified.
+    const rampNow = this.rampAt(run, this.body.x);
+    if (rampNow) {
+      this.lastRamp = rampNow;
+    } else if (this.lastRamp) {
+      if (this.body.x > this.lastRamp.x + 100 && this.body.airTime < 0.14 && this.body.vy > -80) {
+        this.jump(run);
+      }
+      if (this.body.x > this.lastRamp.x + 108) this.lastRamp = undefined;
+    }
+
+    // Phase 12 — kicker lips auto-hop exactly like validated ramps: leaving
+    // the takeoff curve of a kicker or gap run applies the standard hop
+    // impulse, so a cruise-speed rider clears the certified gap widths
+    // (wider, speed-hinted gaps still demand real throttle).
+    const lipFeature = (run.trackFeatures ?? []).find(feature =>
+      (feature.id === 'kicker' || feature.id === 'gaprun')
+      && this.body.x > feature.x0 - 30
+      && this.body.x < (feature.id === 'gaprun' ? (feature.gap?.x ?? feature.x1) : feature.x1) + 8);
+    if (lipFeature && this.body.grounded) {
+      this.lastFeatureLip = lipFeature.id === 'gaprun' ? (lipFeature.gap?.x ?? lipFeature.x1) : lipFeature.x1;
+    } else if (this.lastFeatureLip !== undefined) {
+      // No air-time gate here (unlike ramp launches): a rider that jumped
+      // onto the kicker is often still airborne across the lip, and the gap
+      // ahead still needs the standard hop unless they are already flying
+      // up steeply on their own arc.
+      if (this.body.x > this.lastFeatureLip && this.body.vy > -80) {
+        this.jump(run);
+      }
+      if (this.body.x > this.lastFeatureLip + 60) this.lastFeatureLip = undefined;
+    }
 
     const previousX = rider.x;
     const previousY = rider.y;
-    let moved = false;
-    if (rider.grounded) {
-      const previousRamp = this.rampAt(run, rider.x);
-      const slope = Math.tan(rider.rotation);
-      const difficulty = clamp(rider.x / 26000, 0, 1);
-      const rollout = (run.elapsed - START_PAUSE) / START_ROLLOUT;
-      // Phase 9A — ice patches cut traction: slope input on the speed is
-      // amplified and the lean follows the terrain with a visible slip lag.
-      // The physics stays fully deterministic and controllable — ice patches
-      // are only validated onto gentle, step-free terrain.
-      const onIce = !!this.iceAt(run, rider.x);
-      if (rollout < 1) {
-        rider.speed = 250 * rollout * rollout * (3 - 2 * rollout);
-      } else {
-        rider.speed += (slope * 230 * (onIce ? 1.35 : 1) + 8 + difficulty * 9) * delta;
-        rider.speed = clamp(rider.speed, BICYCLE_PHYSICS.minSpeed, BICYCLE_PHYSICS.maxSpeed);
-      }
-      rider.x += rider.speed * delta;
-      moved = true;
+    const events = this.body.step(delta, controls, this.surface, difficulty, (x) => !!this.iceAt(run, x));
 
-      const ramp = this.rampAt(run, rider.x);
-      const gap = this.gapAt(run, rider.x);
-      if (previousRamp && !ramp) {
-        rider.y = this.rampSurface(previousRamp, previousRamp.x + 100) - 5;
-        this.jump(run);
-      } else if (ramp) {
-        rider.y = this.rampSurface(ramp, rider.x) - 5;
-        rider.rotation = this.rampAngle(ramp);
-      } else if (gap) {
-        rider.fallingInto = gap;
-        rider.grounded = false;
-        rider.vy = 0;
-        rider.airTime = 0;
-        rider.totalSpin = 0;
-        rider.flipElapsed = undefined;
-        this.emit({ type: 'ledge' });
-      } else {
-        rider.y = this.rideHeight(run, rider.x) - 5;
-        const targetAngle = this.rideAngle(run, rider.x);
-        rider.rotation = onIce
-          ? rider.rotation + shortAngleDelta(targetAngle - rider.rotation) * (1 - Math.exp(-4.5 * delta))
-          : targetAngle;
+    // Classic ground pin: on plain streamed terrain — no track feature, ramp,
+    // bridge or chasm anywhere near the rider — the canonical rider point
+    // sits exactly at terrain − 5 and the chassis exactly matches the slope,
+    // the invariant every legacy consumer (hitboxes, pickups, camera, the
+    // terrain contract tests) was tuned against. The suspension stays live
+    // for track features, ramps and bridge decks, where curves and landings
+    // need real travel — and on ice, where the classic rider's lean lagged
+    // because traction could not carry the snap (ice patches cut traction).
+    if (
+      this.body.grounded
+      && !this.body.onFeature
+      && !this.iceAt(run, this.body.x)
+      && !this.gapAt(run, this.body.x, true)
+      && !this.rampAt(run, this.body.x)
+      && !this.ridingRaisedCurve(run)
+    ) {
+      const groundY = this.terrainAt(this.body.x);
+      const slope = (this.terrainAt(this.body.x + 6) - this.terrainAt(this.body.x - 6)) / 12;
+      this.body.y = groundY - 13;
+      this.body.vy = this.body.vx * slope;
+      this.body.angle = Math.atan2(slope, 1);
+      this.body.omega = 0;
+    }
+
+    // Soft-start rollout: the first seconds ease onto cruise like before.
+    const rollout = (run.elapsed - START_PAUSE) / START_ROLLOUT;
+    if (rollout < 1 && this.body.grounded && this.body.vx > 250 * rollout * rollout * (3 - 2 * rollout)) {
+      this.body.vx = 250 * rollout * rollout * (3 - 2 * rollout);
+    }
+
+    // Map the body back onto the canonical rider fields every downstream
+    // system reads (rider.y stays at the classic "ground - 5" semantics).
+    rider.x = this.body.x;
+    // Grounded and level, the COM sits ~13 px above the surface; +8 restores
+    // the classic "rider point at ground − 5" that every consumer (obstacle
+    // hitboxes, coin pickups, camera, popups) was tuned against.
+    rider.y = this.body.y + 8;
+    rider.speed = Math.max(0, this.body.vx);
+    rider.vy = this.body.vy;
+    rider.rotation = this.body.angle;
+    rider.angularVelocity = this.body.omega;
+    rider.grounded = this.body.grounded;
+    rider.airTime = this.body.airTime;
+    this.lastMappedSpeed = rider.speed;
+    this.lastMappedX = rider.x;
+    this.lastMappedY = rider.y;
+    this.lastMappedRotation = rider.rotation;
+    this.lastMappedVy = rider.vy;
+    this.lastMappedOmega = rider.angularVelocity;
+
+    // Physical spin bookkeeping: backflips rotate the chassis backwards
+    // (negative pitch in canvas space), frontflips the other way.
+    if (!this.body.grounded) {
+      const previousSpin = rider.totalSpin;
+      rider.totalSpin = clamp(rider.totalSpin - events.spinDelta, -TAU * 4, TAU * 4);
+      if (Math.floor(Math.abs(rider.totalSpin) / Math.PI) > Math.floor(Math.abs(previousSpin) / Math.PI)) {
+        this.emit({ type: 'flipTick' });
       }
     }
 
-    if (!rider.grounded) {
-      if (!moved) rider.x += rider.speed * delta;
-      rider.speed = clamp(rider.speed + delta * BICYCLE_PHYSICS.airborneAcceleration, BICYCLE_PHYSICS.minSpeed, BICYCLE_PHYSICS.maxSpeed);
-      rider.airTime += delta;
-      rider.vy += BICYCLE_PHYSICS.gravity * delta;
-      rider.y += rider.vy * delta;
+    if (!this.body.grounded) {
       const previousGap = this.gapAt(run, previousX);
       if (!rider.fallingInto && previousGap) {
         const farEdge = previousGap.x + (previousGap.width ?? 0);
         if (rider.x > farEdge) {
-          const crossing = (farEdge - previousX) / (rider.x - previousX);
+          const crossing = (farEdge - previousX) / (rider.x - previousX || 1);
           const lipY = this.terrainAt(farEdge) - 5;
           if (lerp(previousY, rider.y, crossing) > lipY) rider.fallingInto = previousGap;
         }
       }
-
       if (rider.fallingInto) {
         const farEdge = rider.fallingInto.x + (rider.fallingInto.width ?? 0);
-        rider.x = Math.min(rider.x, farEdge - 8);
-      }
-      const ramp = this.rampAt(run, rider.x);
-      const surfaceAngle = ramp ? this.rampAngle(ramp) : this.rideAngle(run, rider.x);
-
-      if (rider.flipElapsed === undefined && this.flipHoldTime(rider) >= FLIP_HOLD_SECONDS) {
-        rider.flipElapsed = 0;
-      }
-
-      const previousSpin = rider.totalSpin;
-      if (rider.flipElapsed !== undefined && previousSpin < TAU) {
-        rider.flipElapsed += delta;
-        rider.totalSpin = TAU * flipProgress(rider.flipElapsed);
-        if (Math.floor(rider.totalSpin / Math.PI) > Math.floor(previousSpin / Math.PI)) {
-          this.emit({ type: 'flipTick' });
+        if (this.body.x > farEdge - 8) {
+          this.body.x = farEdge - 8;
+          rider.x = this.body.x;
         }
       }
+    }
 
-      const spinStep = rider.totalSpin - previousSpin;
-      rider.angularVelocity = delta > 0 ? -spinStep / delta : 0;
-      const neutralAngle = rider.rotation + previousSpin;
-      const correction = 1 - Math.exp(-7.5 * delta);
-      rider.rotation = neutralAngle + this.shortestAngle(surfaceAngle - neutralAngle) * correction - rider.totalSpin;
-
-      const groundY = (ramp ? this.rampSurface(ramp, rider.x) : this.rideHeight(run, rider.x)) - 5;
-      if (!rider.fallingInto && !this.gapAt(run, rider.x) && rider.vy > 0 && rider.y >= groundY) {
-        this.land(run, groundY, surfaceAngle);
+    // Landing: crash on an unreadable touchdown, award clean ones. The
+    // invulnerability grace (shield absorb, revive protection) covers rough
+    // touchdowns exactly like it covers obstacle hits.
+    if (events.landed && !run.over) {
+      if (run.elapsed >= run.invulnerableUntil
+        && (events.landed.angleError > BICYCLE_PHYSICS.landingAngleLimit
+        || Math.abs(events.landed.spin) > BICYCLE_PHYSICS.landingSpinLimit)) {
+        run.shake = 12;
+        this.burst(run, rider.x, rider.y + 11, 26, this.environment.burstColors.heavy, 200, -125);
+        this.emit({ type: 'crash', kind: 'landing' });
+        this.finishRun(run, 'The landing got away from you.');
+        return;
       }
+      this.handleMotoLanding(run, events.landed.angleError, events.landed.impact);
+    }
+
+    // Head strikes: the track may never intersect the rider's helmet.
+    if (events.headHit && !run.over && run.elapsed >= run.invulnerableUntil) {
+      run.shake = 12;
+      this.burst(run, rider.x, rider.y - 26, 26, this.environment.burstColors.heavy, 200, -125);
+      this.emit({ type: 'crash', kind: 'landing' });
+      this.finishRun(run, 'The track clipped your helmet.');
+      return;
     }
 
     if (run.over) return;
@@ -1756,13 +2127,24 @@ export class SnowGameEngine {
     }
     if (this.checkCollision(run)) return;
 
+    // The fall crash over a track-feature chasm respects revival grace like
+    // every other crash: a shielded or freshly revived rider dunked into a
+    // gaprun chasm keeps riding out the grace window instead of ending the
+    // run mid-event. A plain planner gap stays fatal during protection —
+    // revive shields hits, never unsupported surfaces.
     if (rider.y > this.height + 115) {
-      this.emit({ type: 'crash', kind: 'fall' });
-      this.finishRun(run, rider.fallingInto ? 'You fell into a chasm.' : 'A little too much open air.');
-      return;
+      const chasm = rider.fallingInto ?? this.gapAt(run, rider.x, true);
+      if (run.elapsed >= run.invulnerableUntil || !chasm?.featureGap) {
+        this.emit({ type: 'crash', kind: 'fall' });
+        this.finishRun(run, rider.fallingInto ? 'You fell into a chasm.' : 'A little too much open air.');
+        return;
+      }
     }
 
-    run.cameraX += (rider.x - this.width * this.riderScreenPosition(run) - run.cameraX) * (1 - Math.exp(-4.2 * delta));
+    // Phase 12 — the camera tightens its follow as the motorcycle speeds up,
+    // so throttle runs never push the bike toward the screen edge.
+    const follow = 4.2 + clamp(rider.speed / 340, 0, 1) * 1.8;
+    run.cameraX += (rider.x - this.width * this.riderScreenPosition(run) - run.cameraX) * (1 - Math.exp(-follow * delta));
     const cameraTargetY = clamp((this.height * 0.62 - rider.y) * 0.12, -22, 28);
     run.cameraY += (cameraTargetY - run.cameraY) * (1 - Math.exp(-2.8 * delta));
     this.addTrail(run, delta);
@@ -1804,6 +2186,9 @@ export class SnowGameEngine {
     this.doorCues = { approachOpen: false, celebrateClose: false, exitOpen: false, exitClose: false };
     run.sceneStartSpeed = Math.max(205, run.rider.speed);
     run.objects = run.objects.filter((object) => object.x + (object.width ?? 50) < run.rider.x - 60);
+    // Phase 12 — the scripted approach rides clean terrain to the door.
+    run.trackFeatures = (run.trackFeatures ?? []).filter((feature) => feature.x1 < run.rider.x - 60);
+    run.trackNextX = Math.max(run.trackNextX ?? 0, run.rider.x + this.width * 1.4);
     run.popups = [];
     run.combo = 0;
     run.shake = 0;
@@ -1935,6 +2320,13 @@ export class SnowGameEngine {
         run.nextHazardX = rider.x + 650;
         run.nextPowerX = rider.x + 1100;
         run.snowRate = this.environment.snowIntensity;
+        // Phase 12 — fresh track features for the new level.
+        run.trackFeatures = [];
+        run.trackNextX = rider.x + 1500;
+        run.trackLastId = null;
+        this.announcedFeatures.clear();
+        this.lastRamp = undefined;
+        this.syncBodyFromRider();
         this.populateAhead(run);
       }
     }
@@ -1961,34 +2353,20 @@ export class SnowGameEngine {
     }
   }
 
-  private land(run: RunState, groundY: number, angle: number): void {
+  /** Phase 12 — landing awards for the motorcycle (crash cases are handled in
+   * step() before this runs; the physics itself keeps the body on the curve). */
+  private handleMotoLanding(run: RunState, angleError: number, impactRaw: number): void {
     const rider = run.rider;
-    const angleError = Math.abs(this.shortestAngle(rider.rotation - angle));
-    const flips = Math.floor(rider.totalSpin / TAU);
+    const flips = Math.floor(Math.abs(rider.totalSpin) / TAU);
+    const flipLabel = rider.totalSpin >= 0 ? 'BACKFLIP' : 'FRONTFLIP';
 
-    if (angleError > BICYCLE_PHYSICS.landingAngleLimit || Math.abs(rider.angularVelocity) > BICYCLE_PHYSICS.landingSpinLimit) {
-      rider.y = groundY;
-      run.shake = 12;
-      this.burst(run, rider.x, groundY, 26, this.environment.burstColors.heavy, 200, -125);
-      this.emit({ type: 'crash', kind: 'landing' });
-      this.finishRun(run, 'The landing got away from you.');
-      return;
-    }
+    this.emit({ type: 'land', force: clamp(impactRaw / 950, 0, 1), clean: angleError < 0.35 });
 
-    this.emit({ type: 'land', force: clamp(rider.vy / 950, 0, 1), clean: angleError < 0.35 });
-
-    // Phase 10A — compress the visual suspension by the touchdown impact
-    // (draw-time only; the physics below is untouched).
-    const impact = clamp(rider.vy / 950, 0, 1);
+    // Phase 10A — compress the visual suspension by the touchdown impact.
+    const impact = clamp(impactRaw / 950, 0, 1);
     this.suspensionVelocity += impact * 5.4;
-
-    rider.grounded = true;
-    rider.vy = 0;
-    rider.y = groundY;
-    rider.rotation = angle;
-    rider.angularVelocity = 0;
     run.shake = Math.max(run.shake, angleError > 0.55 ? 4.2 : 2.4);
-    this.burst(run, rider.x, groundY + 2, (angleError > 0.55 ? 16 : 10) + Math.round(impact * 9),
+    this.burst(run, rider.x, rider.y + 13, (angleError > 0.55 ? 16 : 10) + Math.round(impact * 9),
       this.environment.burstColors.soft, 135 + impact * 60, -90 - impact * 25);
 
     if (flips > 0) {
@@ -2002,14 +2380,15 @@ export class SnowGameEngine {
       const cleanBonus = angleError < 0.48 ? 100 : 0;
       const points = Math.round(base * multiplier) + cleanBonus;
       run.bonus += points;
-      const trickLabel = flips === 1 ? 'BACKFLIP' : `${flips}x BACKFLIP`;
+      const trickLabel = flips === 1 ? flipLabel : `${flips}x ${flipLabel}`;
       const comboLabel = run.combo > 1 ? `  /  COMBO x${run.combo}` : '';
-      this.popup(run, rider.x, groundY - 68, `${trickLabel}  +${points}${comboLabel}`, '#ffe3a9');
+      this.popup(run, rider.x, rider.y - 57, `${trickLabel}  +${points}${comboLabel}`, '#ffe3a9');
       this.emit({ type: 'trick', flips, combo: run.combo });
     } else if (angleError < 0.35) {
-      this.popup(run, rider.x, groundY - 56, 'SMOOTH LANDING  +40', '#e8f8fc');
+      this.popup(run, rider.x, rider.y - 45, 'SMOOTH LANDING  +40', '#e8f8fc');
       run.bonus += 40;
     }
+    rider.totalSpin = 0;
   }
 
   private collectPickups(run: RunState, delta: number): void {
@@ -2185,7 +2564,7 @@ export class SnowGameEngine {
   private saveStableCheckpoint(): void {
     const run = this.run;
     if (!run || run.over || run.levelPhase !== 'riding' || !run.rider.grounded || run.rider.fallingInto
-      || this.gapAt(run, run.rider.x) || this.rampAt(run, run.rider.x)) return;
+      || this.gapAt(run, run.rider.x) || this.rampAt(run, run.rider.x) || this.body.onFeature) return;
     const danger = run.objects.some((object) =>
       (object.plan && run.rider.x >= object.plan.warningStart && run.rider.x <= object.plan.clearUntil)
       || (['rock', 'tree', 'log', 'swinging-log', 'root', 'fence', 'snowball', 'icicle', 'branch'].includes(object.kind) && Math.abs(object.x - run.rider.x) < 80));
@@ -2259,13 +2638,16 @@ export class SnowGameEngine {
     const sin = Math.sin(rider.rotation);
 
     for (let index = 0; index < bursts; index += 1) {
-      for (const axle of WHEEL_AXLES) {
+      for (const axle of [-MOTO_PHYSICS.wheelBase / 2, MOTO_PHYSICS.wheelBase / 2]) {
         if (run.particles.length >= MAX_PARTICLES) return;
         // Snow leaves the lower rear quadrant along the tire's tangent.
+        // Phase 12 — the spray origin is the moto wheel's contact point
+        // (axle at ±wheelBase/2, +axleY, radius wheelRadius below the COM;
+        // rider.y sits 11 px above the COM).
         const angle = 0.2 + Math.random() * 0.5;
-        const localX = (axle - WHEEL_RADIUS * Math.sin(angle)) * BIKE_SCALE;
-        const localY = WHEEL_CONTACT_Y - WHEEL_RADIUS * (1 - Math.cos(angle)) * BIKE_SCALE;
-        const force = rider.speed * lerp(0.24, 0.48, Math.random()) * (axle === REAR_AXLE ? 1 : 0.72);
+        const localX = axle - MOTO_PHYSICS.wheelRadius * Math.sin(angle);
+        const localY = MOTO_PHYSICS.axleY + MOTO_PHYSICS.wheelRadius * Math.cos(angle) - 11;
+        const force = rider.speed * lerp(0.24, 0.48, Math.random()) * (axle < 0 ? 1 : 0.72);
         const backward = -Math.cos(angle) * force;
         const upward = -Math.sin(angle) * force;
         const life = 0.36 + Math.random() * 0.28;
@@ -2392,13 +2774,6 @@ export class SnowGameEngine {
     run.popups.push({ x, y, text, color, life: 1.35, maxLife: 1.35 });
   }
 
-  private shortestAngle(angle: number): number {
-    let result = angle;
-    while (result > Math.PI) result -= TAU;
-    while (result < -Math.PI) result += TAU;
-    return result;
-  }
-
   private draw(): void {
     const context = this.context;
     const width = this.width;
@@ -2449,6 +2824,7 @@ export class SnowGameEngine {
     // Phase 9B — environment-specific crest detail rides the collision surface.
     this.environment.drawGroundDetail(context, view, palette);
     this.environment.drawDecorations(context, view, this.decorationReserved, palette);
+    if (run && !isMenu) this.drawTrackFeatures(context, run, cameraX, palette);
     if (run && !isMenu) this.drawTrail(context, run, cameraX, palette);
     if (run && !isMenu) this.drawObjects(context, run, cameraX, palette);
     if (run && !isMenu) this.drawParticles(context, run, cameraX);
@@ -3094,6 +3470,90 @@ export class SnowGameEngine {
     }
   }
 
+  /**
+   * Phase 12 — track feature rendering. The ribbon is stroked exactly along
+   * the collision curve (same shapes the wheels query), so what you see is
+   * precisely what you ride: a packed-snow base, a lit crown, timber rims
+   * and stilts for the suspended pieces.
+   */
+  private drawTrackFeatures(context: CanvasRenderingContext2D, run: RunState, cameraX: number, palette: Palette): void {
+    const features = run.trackFeatures;
+    if (!features || !features.length) return;
+    const night = palette.night;
+    context.save();
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+    for (const feature of features) {
+      if (feature.x1 < cameraX - 80 || feature.x0 > cameraX + this.width + 80) continue;
+
+      // Stilts carry suspended pieces down to the terrain.
+      if (feature.supports?.length) {
+        context.strokeStyle = '#58433a';
+        context.lineWidth = 5;
+        context.beginPath();
+        for (const [top, bottom] of feature.supports) {
+          context.moveTo(top.x - cameraX, top.y + 3);
+          context.lineTo(bottom.x - cameraX, bottom.y);
+        }
+        context.stroke();
+        context.strokeStyle = '#7a5a41';
+        context.lineWidth = 2;
+        context.beginPath();
+        for (const [top, bottom] of feature.supports) {
+          context.moveTo(top.x - cameraX, top.y + 3);
+          context.lineTo(bottom.x - cameraX, bottom.y);
+        }
+        context.stroke();
+      }
+
+      // Packed base ribbon + lit crown, both centred on the exact curve.
+      context.strokeStyle = `rgba(64,84,104,${0.92 - night * 0.1})`;
+      context.lineWidth = feature.halfThickness * 2;
+      context.beginPath();
+      for (const shape of feature.curves) traceCurve(context, shape);
+      context.stroke();
+      context.strokeStyle = '#dcecf7';
+      context.lineWidth = 6;
+      context.beginPath();
+      for (const shape of feature.curves) traceCurve(context, shape);
+      context.stroke();
+      context.strokeStyle = 'rgba(255,255,255,0.85)';
+      context.lineWidth = 2;
+      context.beginPath();
+      for (const shape of feature.curves) traceCurve(context, shape);
+      context.stroke();
+
+      // Timber rims at every curve end mark the transitions.
+      context.strokeStyle = '#775840';
+      context.lineWidth = 5;
+      context.beginPath();
+      for (const shape of feature.curves) {
+        for (const t of [0, 1]) {
+          const point = curvePoint(shape, t);
+          context.moveTo(point.x - cameraX - 4, point.y);
+          context.lineTo(point.x - cameraX + 4, point.y - 16);
+        }
+      }
+      context.stroke();
+
+      // Speed recommendation chevrons on the approach.
+      if (feature.speedHint && feature.speedHint > 0) {
+        const baseY = this.terrainAt(feature.x0 - 90);
+        context.strokeStyle = 'rgba(255,196,96,0.95)';
+        context.lineWidth = 4;
+        context.beginPath();
+        for (let index = 0; index < feature.speedHint; index += 1) {
+          const cx = feature.x0 - 130 + index * 26 - cameraX;
+          context.moveTo(cx - 10, baseY - 14 - index * 2);
+          context.lineTo(cx, baseY - 22 - index * 2);
+          context.lineTo(cx + 10, baseY - 14 - index * 2);
+        }
+        context.stroke();
+      }
+    }
+    context.restore();
+  }
+
   private drawObjects(context: CanvasRenderingContext2D, run: RunState, cameraX: number, palette: Palette): void {
     for (const object of run.objects) {
       const x = (object.pulled?.x ?? object.x) - cameraX;
@@ -3154,7 +3614,7 @@ export class SnowGameEngine {
       if (power) this.drawPower(context, x, groundY - 25, power);
       if (object.bridged && object.plan?.obstacleId === 'moving-platform') {
         this.drawMovingPlatform(context, object, x, run, palette);
-      } else if (object.bridged) {
+      } else if (object.bridged && !object.track) {
         this.drawBridge(context, object, x, palette);
       }
       if (object.kind === 'gap' && !object.bridged) this.drawGapVariant(context, object, x, palette);
@@ -3356,7 +3816,11 @@ export class SnowGameEngine {
     context.lineWidth = 9;
     context.beginPath();
     context.moveTo(x, startY);
-    context.lineTo(x + 100, endY);
+    // Phase 12 — the lip follows the same smooth Bézier the wheels ride.
+    for (let step = 1; step <= 16; step += 1) {
+      const sampleX = ramp.x + (step / 16) * 100;
+      context.lineTo(x + (sampleX - ramp.x), this.rampSurface(ramp, sampleX));
+    }
     context.stroke();
     context.strokeStyle = this.familyColor('#c28b55', palette);
     context.lineWidth = 5;
@@ -3986,39 +4450,51 @@ export class SnowGameEngine {
     }
 
     context.rotate(rotation);
+    // Phase 12 — motorcycle frame: local origin is the centre of mass, axles
+    // sit at (±22, +6) with 10 px wheels, so the contact line is +16. The
+    // transform maps that contact line onto the classic rider anchor (+5),
+    // keeping every existing placement (menu band geometry included) valid.
+    const scale = idle ? 0.5 : 1;
+    const MOTO_CONTACT_Y = 16;
     context.translate(0, WHEEL_CONTACT_Y);
-    context.scale(BIKE_SCALE, BIKE_SCALE);
-    context.translate(0, -WHEEL_CONTACT_Y);
+    context.scale(scale, scale);
+    context.translate(0, -MOTO_CONTACT_Y);
     context.lineCap = 'round';
     context.lineJoin = 'round';
 
     const wheelAngle = (distance / 6.5) % TAU;
+    const forkCompression = this.body.frontCompression;
 
-    for (const axle of WHEEL_AXLES) {
+    for (const axle of [-MOTO_PHYSICS.wheelBase / 2, MOTO_PHYSICS.wheelBase / 2]) {
       context.save();
-      context.translate(axle, WHEEL_Y);
+      context.translate(axle, MOTO_PHYSICS.axleY);
       context.rotate(wheelAngle);
-      context.fillStyle = '#40566e';
+      // Knobby tyre.
+      context.fillStyle = '#33424f';
       context.strokeStyle = '#17283f';
       context.lineWidth = 3;
       context.beginPath();
-      context.arc(0, 0, WHEEL_RADIUS, 0, TAU);
+      context.arc(0, 0, MOTO_PHYSICS.wheelRadius, 0, TAU);
       context.fill();
       context.stroke();
-
-      context.strokeStyle = '#c6d7df';
-      context.lineWidth = 1.8;
+      context.strokeStyle = '#17283f';
+      context.lineWidth = 2;
       context.beginPath();
-      for (let spoke = 0; spoke < 3; spoke += 1) {
-        const angle = spoke * TAU / 3;
-        context.moveTo(0, 0);
-        context.lineTo(Math.cos(angle) * 10, Math.sin(angle) * 10);
+      for (let knob = 0; knob < 6; knob += 1) {
+        const angle = knob * TAU / 6 + 0.26;
+        context.moveTo(Math.cos(angle) * 8.2, Math.sin(angle) * 8.2);
+        context.lineTo(Math.cos(angle) * 10.6, Math.sin(angle) * 10.6);
       }
       context.stroke();
+      // Hub + brake disc.
+      context.fillStyle = '#c6d7df';
+      context.beginPath();
+      context.arc(0, 0, 3.2, 0, TAU);
+      context.fill();
       context.strokeStyle = '#f0c896';
       context.lineWidth = 2;
       context.beginPath();
-      context.arc(0, 0, 10, 0, 0.9);
+      context.arc(0, 0, 6.4, 0.2, 1.4);
       context.stroke();
       context.restore();
     }
@@ -4027,29 +4503,102 @@ export class SnowGameEngine {
     // the ground (compression from the landing impact, decaying spring), and
     // dips its nose slightly under the same load. Cadence: a soft pedal-rate
     // bob keeps the grounded ride alive without moving the legs.
-    const squat = this.suspension;
+    const squat = Math.max(this.suspension, this.body.rearCompression * 0.7);
     const bob = grounded && !idle ? Math.sin(distance / 26) * 1.3 : 0;
     context.save();
     context.translate(0, squat * 3.4);
     context.rotate(-squat * 0.07);
 
+    const rearAxle = -MOTO_PHYSICS.wheelBase / 2;
+    const frontAxle = MOTO_PHYSICS.wheelBase / 2;
+    const axleY = MOTO_PHYSICS.axleY;
+    const forkBottomX = frontAxle - forkCompression * 1.6;
+    const forkBottomY = axleY - forkCompression * 2.2;
+
+    // Swingarm and frame.
     context.strokeStyle = this.bike.color;
     context.lineWidth = 3.5;
     context.beginPath();
-    context.moveTo(REAR_AXLE, WHEEL_Y);
-    context.lineTo(-8, -28);
-    context.lineTo(17, -24);
-    context.lineTo(1, -10);
-    context.closePath();
-    context.moveTo(-8, -28);
-    context.lineTo(1, -10);
-    context.moveTo(FRONT_AXLE, WHEEL_Y);
-    context.lineTo(14, -33);
-    context.lineTo(21, -34);
+    context.moveTo(rearAxle, axleY);
+    context.lineTo(-5, -1);
+    context.lineTo(-11, -14);
+    context.moveTo(-5, -1);
+    context.lineTo(11, -12);
     context.stroke();
+    // Engine block with cooling fins.
+    context.fillStyle = '#2c3a4d';
+    context.beginPath();
+    context.moveTo(-4, -10);
+    context.lineTo(7, -11);
+    context.lineTo(9, -1);
+    context.lineTo(-2, 0);
+    context.closePath();
+    context.fill();
+    context.strokeStyle = '#46586e';
+    context.lineWidth = 1.4;
+    context.beginPath();
+    for (let fin = 0; fin < 3; fin += 1) {
+      context.moveTo(-3, -8 + fin * 3);
+      context.lineTo(8, -9 + fin * 3);
+    }
+    context.stroke();
+    // Exhaust header curling up beside the engine.
+    context.strokeStyle = '#9fb2c4';
+    context.lineWidth = 3;
+    context.beginPath();
+    context.moveTo(6, -3);
+    context.quadraticCurveTo(16, -4, 19, -10);
+    context.stroke();
+    // Front fork (upper stanchion + lower slider, visually compressing).
+    context.strokeStyle = '#17283f';
+    context.lineWidth = 4;
+    context.beginPath();
+    context.moveTo(11, -12);
+    context.lineTo(forkBottomX, forkBottomY);
+    context.stroke();
+    context.strokeStyle = '#c6d7df';
+    context.lineWidth = 2.5;
+    context.beginPath();
+    context.moveTo(forkBottomX, forkBottomY);
+    context.lineTo(frontAxle, axleY);
+    context.stroke();
+    // Handlebar + headlight.
+    context.strokeStyle = '#17283f';
+    context.lineWidth = 3;
+    context.beginPath();
+    context.moveTo(11, -12);
+    context.lineTo(15, -19);
+    context.stroke();
+    context.fillStyle = '#ffe9b0';
+    context.beginPath();
+    context.arc(14.5, -13, 2.4, 0, TAU);
+    context.fill();
+    // Tank and seat.
+    context.fillStyle = this.bike.color;
+    context.beginPath();
+    context.moveTo(-12, -13);
+    context.quadraticCurveTo(-2, -21, 10, -15);
+    context.lineTo(8, -11);
+    context.quadraticCurveTo(-3, -16, -10, -10);
+    context.closePath();
+    context.fill();
+    context.fillStyle = '#25344e';
+    context.beginPath();
+    context.moveTo(-13, -12);
+    context.quadraticCurveTo(-8, -16, -3, -14);
+    context.lineTo(-4, -10);
+    context.quadraticCurveTo(-9, -11, -13, -12);
+    context.closePath();
+    context.fill();
 
     if (strength > 0) this.drawRiderOutline(context, grounded, idle, airTime, strength, bob);
+    // The rider sits on the seat, feet on the pegs — slightly compact against
+    // the motorcycle silhouette (and matching the classic menu sprite size).
+    context.save();
+    context.translate(0, 6);
+    context.scale(0.92, 0.92);
     this.drawRiderBody(context, grounded, idle, airTime, bob);
+    context.restore();
     context.restore();
     context.restore();
   }

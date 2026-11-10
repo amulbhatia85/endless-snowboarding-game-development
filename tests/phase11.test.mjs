@@ -127,7 +127,10 @@ test('the audit repro ride (shielded, queued jumps) completes without freezing',
     });
     if (danger) instance.jumpQueued = true;
   };
-  const distances = ride(game, 60 * 120, { shield: true, bot });
+  // Phase 12 — the level target rose to 150 000 (from 50 000), so the
+  // natural-speed audit ride needs roughly three times the frames to roll
+  // a whole level into the house approach.
+  const distances = ride(game, 60 * 400, { shield: true, bot });
 
   assertMonotonic(distances);
   assert.equal(game.run.levelPhase, 'approach', 'the level completes into the house approach');

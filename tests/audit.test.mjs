@@ -218,7 +218,12 @@ test('Every generated hazard is planner-produced with valid physics metadata', (
     assert.ok(objects.length >= 10, `L${n} generated ${objects.length} hazards`);
     for (const object of objects) {
       assert.ok(HAZARD_KINDS.includes(object.kind), `L${n} kind ${object.kind} is a known hazard`);
-      if (object.kind === 'gap' && object.bridged) {
+      // Phase 12 — a bridged flag on a track feature's chasm means the deck
+      // is one of its curves (suspended arcs and bowls), not a rope bridge,
+      // so the theme's bridge allowance does not apply to it.
+      if (object.kind === 'gap' && object.bridged && object.track) {
+        assert.ok(object.featureGap, 'track decks trace back to their feature');
+      } else if (object.kind === 'gap' && object.bridged) {
         assert.ok(activeAllowed.includes('bridge'), 'bridges only where the theme allows');
       } else {
         assert.ok(activeAllowed.includes(object.kind), `L${n} ${object.kind} is allowed+implemented in ${level.environment}`);
@@ -250,7 +255,10 @@ test('DifficultyManager visibly changes pacing between levels', () => {
     game.start();
     const run = game.run;
     run.elapsed = 5;
-    run.rider.x = 350_000;
+    // Phase 12 — the level target score rose to 150 000, so the directive's
+    // progress sample point scales with it (350 000 px was 70 % of the old
+    // 50 000 target; 1 050 000 px keeps the same progress at 150 000).
+    run.rider.x = 1_050_000;
     run.rider.y = game.terrainAt(run.rider.x) - 5;
     run.distance = run.rider.x;
     run.hazardClearUntil = run.rider.x + 640;

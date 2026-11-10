@@ -311,8 +311,11 @@ test('Obstacle preview mode collapses generation to one validated type and resto
     const placed = [];
     const run = game.run;
     for (let frame = 0; frame < frames; frame += 1) {
+      // Phase 12 — track-curve features (loop gaps, gap runs) also push
+      // planned gap objects; they are terrain content, not planner variety,
+      // so they are excluded from the preview collapse check.
       for (const object of run.objects) {
-        if (object.plan && !placed.includes(object)) placed.push(object);
+        if (object.plan && !object.featureGap && !placed.includes(object)) placed.push(object);
       }
       run.invulnerableUntil = run.elapsed + 10;
       game.clock += 1 / 60;
@@ -439,8 +442,8 @@ test('Ice patches cut traction: lean lags and slope input is amplified', () => {
   const iced = run.rider.speed;
   assert.ok(iced > normal, `leaning accelerates more on ice (${iced.toFixed(1)} > ${normal.toFixed(1)})`);
   // Source contract: the traction hook is explicit and deterministic.
-  const source = readFileSync(new URL('../src/game/engine.ts', import.meta.url), 'utf8');
-  assert.ok(source.includes('onIce ? 1.35 : 1'), 'slope amplification factor present');
+  const source = readFileSync(new URL('../src/game/motoPhysics.ts', import.meta.url), 'utf8');
+  assert.ok(source.includes('iceSlopeFactor: 1.35'), 'slope amplification factor present');
 });
 
 test('Icicles crash only inside the falling window and telegraph a warning first', () => {
@@ -617,8 +620,11 @@ test('Generation with the expanded library is deterministic and memory-bounded',
     const run = game.run;
     const placed = [];
     for (let frame = 0; frame < 2700; frame += 1) {
+      // Phase 12 — track-curve features (loop gaps, gap runs) also push
+      // planned gap objects; they are terrain content, not planner variety,
+      // so they are excluded from the preview collapse check.
       for (const object of run.objects) {
-        if (object.plan && !placed.includes(object)) placed.push(object);
+        if (object.plan && !object.featureGap && !placed.includes(object)) placed.push(object);
       }
       if (frame % 46 === 0) game.press();
       if (frame % 46 === 3) game.release();

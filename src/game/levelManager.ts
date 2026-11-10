@@ -1,6 +1,9 @@
 import type { ObstacleId } from './obstacleRegistry';
 
-export const LEVEL_TARGET_SCORE = 50_000;
+/** Phase 12 — raised from 50,000: the level completion house now asks for a
+ * genuinely long ride (the motorcycle's speed control also lets skilled
+ * players bank score faster, so the target grew 3×). */
+export const LEVEL_TARGET_SCORE = 150_000;
 export type EnvironmentTheme = 'countryside' | 'snowy-mountains' | 'misty-mountains' | 'moonlit-forest' | 'jungle';
 export type ObstacleCategory = ObstacleId;
 

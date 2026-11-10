@@ -4,7 +4,7 @@ import { moduleUrl } from './loadTypeScript.mjs';
 
 // Phase 8 — crash, revive, checkpoint and game recovery.
 
-const { LEVEL_SAVE_KEY } = await import(moduleUrl('src/game/levelManager.ts'));
+const { LEVEL_SAVE_KEY, LEVEL_TARGET_SCORE } = await import(moduleUrl('src/game/levelManager.ts'));
 const { SnowGameEngine } = await import(moduleUrl('src/game/engine.ts'));
 const { RECOVERY_CONFIG } = await import(moduleUrl('src/game/recovery.ts'));
 const { AdService, ADMOB_CONFIG } = await import(moduleUrl('src/game/ads.ts'));
@@ -66,7 +66,11 @@ function beginRun(game) {
   game.start();
   const run = game.run;
   run.elapsed = Math.max(5, run.elapsed);
-  run.nextCoinX = run.nextHazardX = run.nextPowerX = 1e12;
+  // Phase 12 — pin the track-feature stream (loops, gap runs) far away so
+  // crash/revive cycles ride plain terrain: a streamed feature can carry the
+  // rider over an injected rock (its curve sits above the obstacle's
+  // collision envelope) and this suite is about recovery state hygiene.
+  run.nextCoinX = run.nextHazardX = run.nextPowerX = run.trackNextX = 1e12;
   run.objects = [];
   return run;
 }
@@ -90,7 +94,7 @@ function crashIntoRock(game, run, offset = 70) {
 function driveToArrival(game) {
   const run = game.run;
   run.elapsed = Math.max(5, run.elapsed);
-  run.bonus += 50_000;
+  run.bonus += LEVEL_TARGET_SCORE;
   game.step(0);
   assert.equal(run.levelPhase, 'approach');
 }

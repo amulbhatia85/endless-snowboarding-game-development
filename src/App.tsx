@@ -736,6 +736,16 @@ export default function App() {
         } else {
           engine.press();
         }
+      } else if (event.code === 'ArrowDown' || event.code === 'KeyS') {
+        // Phase 12 — motorcycle brake.
+        event.preventDefault();
+        if (engine.status === 'playing') engine.brakePress();
+      } else if (event.code === 'ArrowLeft' || event.code === 'KeyA') {
+        event.preventDefault();
+        if (engine.status === 'playing') engine.setLean(-1);
+      } else if (event.code === 'ArrowRight' || event.code === 'KeyD') {
+        event.preventDefault();
+        if (engine.status === 'playing') engine.setLean(1);
       } else if (event.code === 'Enter' && engine.status === 'gameover') {
         event.preventDefault();
         void resultsActionRef.current('restart');
@@ -749,6 +759,12 @@ export default function App() {
     const handleKeyUp = (event: KeyboardEvent) => {
       if (event.code === 'Space' || event.code === 'ArrowUp' || event.code === 'KeyW') {
         engineRef.current?.release();
+      } else if (event.code === 'ArrowDown' || event.code === 'KeyS') {
+        engineRef.current?.brakeRelease();
+      } else if (event.code === 'ArrowLeft' || event.code === 'KeyA') {
+        engineRef.current?.setLean(0);
+      } else if (event.code === 'ArrowRight' || event.code === 'KeyD') {
+        engineRef.current?.setLean(0);
       }
     };
 
@@ -1213,7 +1229,7 @@ export default function App() {
               style={{ animationDuration: `${completionHoldSeconds}s` }}
             >
               <span className="level-completion-rule" />
-              <p>50,000 POINTS · A JOURNEY WELL RIDDEN</p>
+              <p>150,000 POINTS · A JOURNEY WELL RIDDEN</p>
               <h2>LEVEL {hud.level.number} COMPLETED</h2>
               <div className="level-completion-stats" aria-label="Run so far">
                 <span><b>{formatNumber(hud.score)}</b> SCORE</span>
@@ -1238,7 +1254,7 @@ export default function App() {
             <div className="level-introduction">
               <p>LEVEL {hud.level.number}</p>
               <h2>{hud.level.name}</h2>
-              <span>A new trail · 50,000 points to earn</span>
+              <span>A new trail · 150,000 points to earn</span>
             </div>
           )}
         </div>
@@ -1258,7 +1274,7 @@ export default function App() {
             <h1 id="game-title">AFTERGLOW</h1>
             <p className="intro-description">FIND YOUR RHYTHM BETWEEN EARTH AND SKY.</p>
             <p className="control-copy">
-              <span className="keycap">SPACE</span> OR TAP TO JUMP <i /> HOLD FOR ONE BACKFLIP
+              <span className="keycap">HOLD</span> THROTTLE <i /> <span className="keycap">TAP</span> HOP <i /> <span className="keycap">A</span>/<span className="keycap">D</span> LEAN
             </p>
             <div className="menu-studio-line">
               <StudioMark compact />
@@ -1458,14 +1474,14 @@ export default function App() {
                 <h2 id="menu-page-title">How to Play</h2>
                 <p className="page-intro">One button. A whole mountain of timing.</p>
                 <div className="how-grid">
-                  <article><span>01</span><strong>Jump</strong><p>Tap the screen, click, or press Space while riding to leave the snow. Short taps hop; timing carries you over hazards.</p></article>
-                  <article><span>02</span><strong>Hold for a backflip</strong><p>Press and hold to start one backflip. The rider levels out after a full rotation — release early for a half turn if the landing calls for it.</p></article>
-                  <article><span>03</span><strong>Land clean</strong><p>Match the slope when you touch down. Landing at a bad angle ends the run — just like hitting an obstacle.</p></article>
-                  <article><span>04</span><strong>Read the mountain</strong><p>Rocks, fallen logs, swinging logs and gaps line the trail. Jump the low ones, steer your flight past the rest.</p></article>
+                  <article><span>01</span><strong>Ride the curves</strong><p>The mountain is built from smooth arcs — kickers, suspended ribbons, C-shaped bowls and full loops. The wheels grip the exact curves you see; suspension, momentum and flight are real physics.</p></article>
+                  <article><span>02</span><strong>Throttle & hop</strong><p>Hold the screen (or W) to open the throttle and build speed — you need it for loops and wide gaps. Tap for a quick hop over rocks and roots.</p></article>
+                  <article><span>03</span><strong>Balance in the air</strong><p>Hold in the air to lean back into a backflip; A and D (or the arrow keys) fine-tune your rotation. Brake with S to shorten a jump. Land aligned with the curve or the run ends.</p></article>
+                  <article><span>04</span><strong>Keep your momentum</strong><p>Loops and bowls trade speed for height — arrive too slow and you fall off the curve. Chevrons before a feature recommend how much speed to carry.</p></article>
                   <article><span>05</span><strong>Glowstones & powers</strong><p>Golden glowstones build your score and wallet. Magnet pulls them in, Shield saves one crash, Double shines your points for a while.</p></article>
-                  <article><span>06</span><strong>Ride to the safe house</strong><p>Each level asks for 50,000 points. Reach the target and a warm safe house completes the level — then a new trail begins.</p></article>
+                  <article><span>06</span><strong>Ride to the safe house</strong><p>Each level asks for 150,000 points. Reach the target and a warm safe house completes the level — then a new trail begins.</p></article>
                 </div>
-                <div className="how-controls"><span className="keycap">TAP</span> Jump / hold to flip <i /> <span className="keycap">SPACE</span> Jump <i /> <span className="keycap">ESC</span> Pause <i /> <span className="keycap">M</span> Mute</div>
+                <div className="how-controls"><span className="keycap">HOLD</span> Throttle <i /> <span className="keycap">TAP</span> Hop <i /> <span className="keycap">A</span>/<span className="keycap">D</span> Lean <i /> <span className="keycap">S</span> Brake <i /> <span className="keycap">ESC</span> Pause <i /> <span className="keycap">M</span> Mute</div>
               </>
             )}
 
@@ -1505,7 +1521,47 @@ export default function App() {
 
       {screen === 'playing' && hud.elapsed < 8 && (!hud.level || hud.level.phase === 'riding') && (
         <div className="play-hint" aria-hidden="true">
-              TAP TO JUMP <span>/</span> HOLD FOR ONE BACKFLIP
+              TAP TO HOP <span>/</span> HOLD TO THROTTLE <span>/</span> HOLD IN AIR TO FLIP
+        </div>
+      )}
+
+      {screen === 'playing' && (!hud.level || hud.level.phase === 'riding') && (
+        <div className="moto-controls" aria-hidden="true">
+          <button
+            type="button"
+            className="moto-button moto-brake"
+            onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); engineRef.current?.brakePress(); }}
+            onPointerUp={(event) => { event.stopPropagation(); engineRef.current?.brakeRelease(); }}
+            onPointerCancel={() => engineRef.current?.brakeRelease()}
+            onPointerLeave={() => engineRef.current?.brakeRelease()}
+            onContextMenu={(event) => event.preventDefault()}
+          >
+            BRAKE
+          </button>
+          <div className="moto-lean-pair">
+            <button
+              type="button"
+              className="moto-button"
+              onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); engineRef.current?.setLean(-1); }}
+              onPointerUp={(event) => { event.stopPropagation(); engineRef.current?.setLean(0); }}
+              onPointerCancel={() => engineRef.current?.setLean(0)}
+              onPointerLeave={() => engineRef.current?.setLean(0)}
+              onContextMenu={(event) => event.preventDefault()}
+            >
+              ◀
+            </button>
+            <button
+              type="button"
+              className="moto-button"
+              onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); engineRef.current?.setLean(1); }}
+              onPointerUp={(event) => { event.stopPropagation(); engineRef.current?.setLean(0); }}
+              onPointerCancel={() => engineRef.current?.setLean(0)}
+              onPointerLeave={() => engineRef.current?.setLean(0)}
+              onContextMenu={(event) => event.preventDefault()}
+            >
+              ▶
+            </button>
+          </div>
         </div>
       )}
 

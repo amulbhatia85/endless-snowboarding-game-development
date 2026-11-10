@@ -2267,3 +2267,55 @@ kbd {
   white-space: pre-wrap;
   user-select: text;
 }
+
+/* Phase 12 — on-screen motorcycle controls (touch + mouse). The brake lives
+   at the left thumb, the lean pair at the right; both stay out of the HUD's
+   way and never intercept the ride surface's own press-and-hold. */
+.moto-controls {
+  position: absolute;
+  z-index: 6;
+  left: 0;
+  right: 0;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  padding: 0 16px;
+  pointer-events: none;
+}
+
+.moto-controls .moto-button {
+  pointer-events: auto;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  min-width: 62px;
+  height: 50px;
+  padding: 0 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(232, 244, 255, 0.32);
+  background: rgba(16, 30, 47, 0.55);
+  color: #e8f4ff;
+  font: 650 11px/1 "Avenir Next", Avenir, "Segoe UI", sans-serif;
+  letter-spacing: 0.14em;
+  backdrop-filter: blur(4px);
+  transition: transform 0.08s ease, background 0.08s ease;
+}
+
+.moto-controls .moto-button:active {
+  transform: scale(0.94);
+  background: rgba(45, 72, 99, 0.72);
+}
+
+.moto-lean-pair {
+  display: flex;
+  gap: 10px;
+}
+
+@media (max-width: 740px) {
+  .moto-controls .moto-button {
+    min-width: 54px;
+    height: 46px;
+    padding: 0 13px;
+  }
+}

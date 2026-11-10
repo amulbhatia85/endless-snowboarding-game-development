@@ -9,7 +9,7 @@ const { TerrainGenerator, validateGap, validateRamp, validateObstacle, validateS
 const { DifficultyManager, DEFAULT_DIFFICULTY_CONFIG } = await import(moduleUrl('src/game/difficulty.ts'));
 const { SnowGameEngine } = await import(moduleUrl('src/game/engine.ts'));
 
-const TARGET = 50_000;
+const TARGET = 150_000;
 
 function storage() {
   const values = new Map();
@@ -111,7 +111,7 @@ test('Pacing zones map the 50k journey and taper into a safe approach', () => {
   assert.equal(manager.zoneAt(0.85, TARGET).label, 'FINAL SEQUENCES');
   assert.equal(manager.zoneAt(0.95, TARGET).label, 'SAFE APPROACH');
   const zone = manager.zoneAt(0.25, TARGET);
-  assert.deepEqual([zone.fromPoints, zone.toPoints], [10_000, 20_000]);
+  assert.deepEqual([zone.fromPoints, zone.toPoints], [30_000, 60_000]);
   const multipliers = [0.05, 0.25, 0.5, 0.7, 0.85, 0.95].map((p) => manager.zoneAt(p, TARGET).multiplier);
   for (let index = 1; index < 4; index += 1) assert.ok(multipliers[index] >= multipliers[index - 1]);
   assert.ok(multipliers[5] < multipliers[4], 'the final zone backs off');
@@ -119,7 +119,7 @@ test('Pacing zones map the 50k journey and taper into a safe approach', () => {
   const approach = manager.directive({ level, progress: 0.95 });
   assert.equal(approach.safeApproach, true);
   assert.equal(challenge.safeApproach, false);
-  assert.ok(approach.intensity < challenge.intensity, '45k–50k tapers below the main challenge');
+  assert.ok(approach.intensity < challenge.intensity, 'the final zone tapers below the main challenge');
 });
 
 test('Difficulty waves breathe instead of climbing monotonically', () => {
@@ -144,7 +144,7 @@ test('Difficulty waves breathe instead of climbing monotonically', () => {
     'each wave swings between a challenge crest and a recovery floor');
   // Upcoming-recovery bookkeeping is self-consistent.
   const before = manager.directive({ level, progress: 0.35 });
-  assert.ok(before.nextRecoveryPoints > 0 && before.nextRecoveryPoints <= 15_000);
+  assert.ok(before.nextRecoveryPoints > 0 && before.nextRecoveryPoints <= 45_000);
   assert.equal(manager.directive({ level, progress: 0.35 + before.nextRecoveryPoints / TARGET + 0.001 }).wave.recovery, true);
   assert.equal(manager.directive({ level, progress: 0.57 }).nextRecoveryPoints, 0, 'inside a valley reports 0');
   assert.equal(manager.directive({ level, progress: 0.95 }).nextRecoveryPoints, null, 'safe approach needs no waves');
@@ -340,9 +340,10 @@ test('The engine paces real runs and keeps the final approach safe', () => {
       || OBSTACLE_PATTERNS.some((pattern) => pattern.id === id)),
     'the pacing memory starts as a bounded list of valid pattern ids');
 
-  // 45k+ → safe approach: injected dangerous hazards beyond the visible edge
-  // are retired, visible/mild ones stay, and nothing dangerous regenerates.
-  run.rider.x = 460_000;
+  // 135k+ (90% of the level target) → safe approach: injected dangerous
+  // hazards beyond the visible edge are retired, visible/mild ones stay, and
+  // nothing dangerous regenerates.
+  run.rider.x = 1_380_000;
   run.rider.y = game.terrainAt(run.rider.x) - 5;
   run.distance = run.rider.x;
   run.elapsed = 5;
@@ -370,11 +371,11 @@ test('The engine paces real runs and keeps the final approach safe', () => {
   assert.ok(run.recentPatterns.every((id) => id === 'recovery'
     || OBSTACLE_PATTERNS.some((pattern) => pattern.id === id)));
 
-  // Control: at ~38k (main-challenge crest, pre-approach) dangerous patterns flow.
+  // Control: at ~112k (main-challenge crest, pre-approach) dangerous patterns flow.
   const control = makeEngine(seedSave(4242, 12));
   control.start();
   const controlRun = control.run;
-  controlRun.rider.x = 375_000;
+  controlRun.rider.x = 1_125_000;
   controlRun.rider.y = control.terrainAt(controlRun.rider.x) - 5;
   controlRun.distance = controlRun.rider.x;
   controlRun.elapsed = 5;
@@ -391,7 +392,7 @@ test('The engine paces real runs and keeps the final approach safe', () => {
     control.populateAhead(controlRun);
     dangerousSeen += controlRun.objects.filter((object) => dangerousKinds(object) && object.x > controlRun.rider.x).length;
   }
-  assert.ok(dangerousSeen > 0, 'challenge zones still schedule dangerous patterns before 45k');
+  assert.ok(dangerousSeen > 0, 'challenge zones still schedule dangerous patterns before the approach');
   assert.equal(control.lastDirective.safeApproach, false);
   assert.ok(game.lastDirective.safeApproach === true);
   assert.ok(game.lastDirective.intensity < control.lastDirective.intensity, 'the approach eases off');
@@ -428,8 +429,15 @@ test('Physics, speed limits and checkpoints stay intact under pacing', () => {
     if (frame % 60 === 0) {
       const { x, y, vy, speed } = run.rider;
       assert.ok([x, y, vy, speed].every(Number.isFinite), `rider state finite at frame ${frame}`);
-      if (frame > 250) assert.ok(speed >= BICYCLE_PHYSICS.minSpeed && speed <= BICYCLE_PHYSICS.maxSpeed,
-        `speed ${speed} within physics bounds at frame ${frame}`);
+      // Phase 12 — the min/max cruise contract governs heightfield riding.
+      // Track features (loops, curved ramps, gap kickers) are deliberately
+      // momentum-based — the floor is suspended on them and a rider who
+      // carries too little speed separates and flies — and airborne speed is
+      // ballistic, so both states are excluded from the bounds check.
+      if (frame > 250 && run.rider.grounded && !game.body.onFeature) {
+        assert.ok(speed >= BICYCLE_PHYSICS.minSpeed && speed <= BICYCLE_PHYSICS.maxSpeed,
+          `speed ${speed} within physics bounds at frame ${frame}`);
+      }
     }
   }
 

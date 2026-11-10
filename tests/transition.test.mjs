@@ -4,7 +4,7 @@ import { moduleUrl } from './loadTypeScript.mjs';
 
 // Phase 6 — cinematic house arrival & seamless level transitions.
 
-const { LEVEL_SAVE_KEY } = await import(moduleUrl('src/game/levelManager.ts'));
+const { LEVEL_SAVE_KEY, LEVEL_TARGET_SCORE } = await import(moduleUrl('src/game/levelManager.ts'));
 const { SnowGameEngine } = await import(moduleUrl('src/game/engine.ts'));
 
 function storage(values = new Map()) {
@@ -72,7 +72,7 @@ const HAZARDS = (object) => ['rock', 'log', 'tree', 'gap', 'ramp', 'swinging-log
 function driveToArrival(game) {
   const run = game.run;
   run.elapsed = Math.max(5, run.elapsed);
-  run.bonus += 50_000;
+  run.bonus += LEVEL_TARGET_SCORE;
   game.step(0);
   assert.equal(run.levelPhase, 'approach', 'target reached starts the final approach');
   return run.houses[run.houses.length - 1];

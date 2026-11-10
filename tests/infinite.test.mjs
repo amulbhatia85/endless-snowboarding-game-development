@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { moduleUrl } from './loadTypeScript.mjs';
 
-const { LevelManager, generateLevel, LEVEL_SAVE_KEY } = await import(moduleUrl('src/game/levelManager.ts'));
+const { LevelManager, generateLevel, LEVEL_SAVE_KEY, LEVEL_TARGET_SCORE } = await import(moduleUrl('src/game/levelManager.ts'));
 const { TerrainGenerator, TerrainWorld, TERRAIN_MAX_SLOPE } = await import(moduleUrl('src/game/terrain.ts'));
 const { ObstaclePlanner, patternAvailability } = await import(moduleUrl('src/game/obstaclePlanner.ts'));
 const { DifficultyManager } = await import(moduleUrl('src/game/difficulty.ts'));
@@ -95,7 +95,7 @@ function makeEngine({ save = storage() } = {}) {
 
 function validConfiguration(level) {
   assert.ok(Number.isInteger(level.number) && level.number >= 1);
-  assert.equal(level.targetScore, 50000);
+  assert.equal(level.targetScore, LEVEL_TARGET_SCORE);
   assert.ok(THEMES.includes(level.environment));
   assert.ok(PROFILE_IDS.includes(level.profile.id));
   assert.equal(typeof level.profile.label, 'string');
@@ -450,7 +450,7 @@ test('House transitions work at generated levels and preserve the day cycle', ()
   run.elapsed = Math.max(run.elapsed, 3);
   run.objects = [];
   run.nextCoinX = run.nextHazardX = 1e12;
-  run.bonus += 50000;
+  run.bonus += LEVEL_TARGET_SCORE;
   game.step(0);
   assert.equal(run.levelPhase, 'approach');
   let entered = false;
@@ -485,12 +485,12 @@ test('Saving and reloading regenerates the exact same world at any level', () =>
   const manager = new LevelManager({ storage: save, seed: 42 });
   // Walk through three levels of real progression.
   for (let step = 0; step < 3; step += 1) {
-    manager.updateScore(50000, 50000 + step * 50000);
+    manager.updateScore(LEVEL_TARGET_SCORE, LEVEL_TARGET_SCORE + step * LEVEL_TARGET_SCORE);
     assert.equal(manager.markSafeHouseReached(), true);
     manager.advanceAfterTransition();
   }
   assert.equal(manager.current.number, 4);
-  manager.updateScore(12000, 162000);
+  manager.updateScore(12_000, 3 * LEVEL_TARGET_SCORE + 12_000);
   const persisted = save.values.get(LEVEL_SAVE_KEY);
   assert.ok(persisted, 'progress was persisted');
 
@@ -509,7 +509,7 @@ test('Saving and reloading regenerates the exact same world at any level', () =>
 test('Level previews never touch permanent progress, even at level 500', () => {
   const save = storage();
   const manager = new LevelManager({ storage: save, seed: 4242 });
-  manager.updateScore(50000, 50000);
+  manager.updateScore(LEVEL_TARGET_SCORE, LEVEL_TARGET_SCORE);
   assert.equal(manager.markSafeHouseReached(), true);
   manager.advanceAfterTransition(); // persists level 2 with a completed level 1
   const before = save.values.get(LEVEL_SAVE_KEY);
@@ -530,7 +530,7 @@ test('The developer level report reproduces any level deterministically', () => 
   const { game } = makeEngine({ save: seedSave(4242, 23) });
   game.start();
   const report = game.devLevelReport();
-  for (const marker of ['LEVEL 23', 'ENVIRONMENT', 'PROFILE', 'SEED', 'TERRAIN BIAS', 'DIFFICULTY', 'WEATHER', 'OBSTACLES', 'FOCUS', 'PATTERNS', 'TARGET 50000']) {
+  for (const marker of ['LEVEL 23', 'ENVIRONMENT', 'PROFILE', 'SEED', 'TERRAIN BIAS', 'DIFFICULTY', 'WEATHER', 'OBSTACLES', 'FOCUS', 'PATTERNS', 'TARGET 150000']) {
     assert.ok(report.includes(marker), `report includes ${marker}`);
   }
   assert.equal(report, game.devLevelReport(), 'the report is stable');

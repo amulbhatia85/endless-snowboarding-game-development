@@ -8,7 +8,7 @@ import { moduleUrl } from './loadTypeScript.mjs';
 // assertion is backed by measured data, and anything not actually exercised
 // here is listed as an untested limitation in PHASE9E_REPORT.md.
 
-const { generateLevel, LEVEL_SAVE_KEY, createLevelRandom } = await import(moduleUrl('src/game/levelManager.ts'));
+const { generateLevel, LEVEL_SAVE_KEY, createLevelRandom, LEVEL_TARGET_SCORE } = await import(moduleUrl('src/game/levelManager.ts'));
 const { TerrainGenerator } = await import(moduleUrl('src/game/terrain.ts'));
 const { ObstaclePlanner, patternAvailability, patternRating, validPlacementMetadata } = await import(moduleUrl('src/game/obstaclePlanner.ts'));
 const { DifficultyManager } = await import(moduleUrl('src/game/difficulty.ts'));
@@ -809,7 +809,9 @@ test('House transitions complete exactly once at low and high level numbers', ()
     const run = game.run;
     const phaseBefore = game.currentDayPhase();
     ride(game, 400);
-    run.bonus += 60000;
+    // Phase 12 — the level target rose to 150 000, so the forced bonus
+    // scales with it (the arrival gate reads runScore against the target).
+    run.bonus += LEVEL_TARGET_SCORE + 10000;
     // The arrival gate requires a grounded riding step — walk real deltas
     // until the house approach begins (a zero-delta step never lands).
     let settle = 0;

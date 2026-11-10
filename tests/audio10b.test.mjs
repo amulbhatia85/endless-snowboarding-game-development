@@ -13,7 +13,7 @@ import assert from 'node:assert/strict';
 import { moduleUrl } from './loadTypeScript.mjs';
 import { rasterCanvas } from './raster.mjs';
 
-const { LEVEL_SAVE_KEY } = await import(moduleUrl('src/game/levelManager.ts'));
+const { LEVEL_SAVE_KEY, LEVEL_TARGET_SCORE } = await import(moduleUrl('src/game/levelManager.ts'));
 const { AudioManager } = await import(moduleUrl('src/game/audio.ts'));
 const { SnowGameEngine } = await import(moduleUrl('src/game/engine.ts'));
 
@@ -687,7 +687,9 @@ test('house transition emits door open/close and completion in cinematic order',
   const sounds = [];
   const { game, fast } = makeGame(seedSave(7, 3), sounds);
   ride(game, fast, 75);
-  game.run.bonus += 60000; // forces the safe-house approach
+  // Phase 12 — the level target rose to 150 000; the forced bonus scales
+  // with it so the arrival gate opens as it did at the old 50 000 target.
+  game.run.bonus += LEVEL_TARGET_SCORE + 10000; // forces the safe-house approach
   let frames = 0;
   while (game.run.levelPhase !== 'approach' && frames < 400) {
     ride(game, fast, 1);

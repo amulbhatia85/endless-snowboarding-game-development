@@ -6,7 +6,7 @@ import { moduleUrl } from './loadTypeScript.mjs';
 // envelopes, gates, engine integration (weather bias, gameplay folding,
 // coin trails, crossings, dev tools, revival, transitions, determinism).
 
-const { generateLevel, LEVEL_SAVE_KEY } = await import(moduleUrl('src/game/levelManager.ts'));
+const { generateLevel, LEVEL_SAVE_KEY, LEVEL_TARGET_SCORE } = await import(moduleUrl('src/game/levelManager.ts'));
 const { OBSTACLE_PATTERNS, patternRating, validPlacementMetadata } = await import(moduleUrl('src/game/obstaclePlanner.ts'));
 const {
   EVENT_DEFINITIONS, EventManager, scheduleForLevel, eventDefinition, EVENT_IDS,
@@ -538,7 +538,7 @@ test('No events run during house transitions; the next level starts clean', () =
   const reached = rideUntil(game, () => game.events.current?.eventId === 'coin-trail' && game.events.current.intensity > 0.5);
   assert.ok(reached >= 0, 'event active before the house');
   const run = game.run;
-  run.bonus += 50000;
+  run.bonus += LEVEL_TARGET_SCORE;
   game.step(0);
   assert.equal(run.levelPhase, 'approach');
   game.frame((game.__rideTime ?? 0) + 1000 / 60);

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { moduleUrl } from './loadTypeScript.mjs';
 
-const { generateLevel, LevelManager, LEVEL_SAVE_KEY } = await import(moduleUrl('src/game/levelManager.ts'));
+const { generateLevel, LevelManager, LEVEL_SAVE_KEY, LEVEL_TARGET_SCORE } = await import(moduleUrl('src/game/levelManager.ts'));
 const {
   EnvironmentManager,
   DecorationField,
@@ -120,7 +120,7 @@ function completeLevel(game) {
   run.elapsed = Math.max(5, run.elapsed);
   run.objects = [];
   run.nextCoinX = run.nextHazardX = 1e12;
-  run.bonus += 50000;
+  run.bonus += LEVEL_TARGET_SCORE;
   game.step(0);
   assert.equal(run.levelPhase, 'approach');
   const initialLevel = run.levelIndex;

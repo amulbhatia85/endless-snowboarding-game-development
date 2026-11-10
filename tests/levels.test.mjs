@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { moduleUrl } from './loadTypeScript.mjs';
 
-const { LevelManager, generateLevel, LEVEL_SAVE_KEY } = await import(moduleUrl('src/game/levelManager.ts'));
+const { LevelManager, generateLevel, LEVEL_SAVE_KEY, LEVEL_TARGET_SCORE } = await import(moduleUrl('src/game/levelManager.ts'));
 const { SnowGameEngine } = await import(moduleUrl('src/game/engine.ts'));
 
 function storage() {
@@ -23,7 +23,7 @@ function completeLevel(game) {
   run.elapsed = Math.max(5, run.elapsed);
   run.objects = [];
   run.nextCoinX = run.nextHazardX = 1e12;
-  run.bonus += 50000;
+  run.bonus += LEVEL_TARGET_SCORE;
   game.step(0);
   assert.equal(run.levelPhase, 'approach');
   assert.equal(game.levels.safeHouseReached, false);
@@ -55,7 +55,7 @@ test('Level 1 and dynamic future configurations have stable seeds and independen
   for (const number of [1, 2, 3, 4, 5, 100, 1000000]) {
     const level = generateLevel(number, 42);
     assert.equal(level.number, number);
-    assert.equal(level.targetScore, 50000);
+    assert.equal(level.targetScore, LEVEL_TARGET_SCORE);
     assert.deepEqual(level, generateLevel(number, 42));
     assert.notEqual(level.seed, generateLevel(number, 43).seed);
     assert.ok(level.allowedObstacles.length > 0);
@@ -70,15 +70,15 @@ test('A target alone cannot advance; safe house and transition reset only the le
   assert.equal(manager.targetReached, false);
   assert.equal(manager.markSafeHouseReached(), false);
   assert.throws(() => manager.advanceAfterTransition());
-  manager.updateScore(50000, 50000);
+  manager.updateScore(LEVEL_TARGET_SCORE, LEVEL_TARGET_SCORE);
   assert.throws(() => manager.advanceAfterTransition());
   assert.equal(manager.markSafeHouseReached(), true);
   assert.equal(manager.advanceAfterTransition().number, 2);
   assert.equal(manager.levelScore, 0);
-  assert.equal(manager.lifetimeScore, 50000);
-  manager.updateScore(100, 50100);
+  assert.equal(manager.lifetimeScore, LEVEL_TARGET_SCORE);
+  manager.updateScore(100, LEVEL_TARGET_SCORE + 100);
   assert.equal(manager.levelScore, 100);
-  assert.equal(manager.lifetimeScore, 50100);
+  assert.equal(manager.lifetimeScore, LEVEL_TARGET_SCORE + 100);
   assert.throws(() => manager.updateScore(0, 0));
 });
 
@@ -92,7 +92,7 @@ test('Progress is atomic, versioned, and ignores invalid checkpoints and corrupt
   assert.equal(restored.checkpoint, 12);
   assert.equal(restored.levelScore, 120);
   assert.equal(restored.lifetimeScore, 120);
-  manager.updateScore(50000, 50000);
+  manager.updateScore(LEVEL_TARGET_SCORE, LEVEL_TARGET_SCORE);
   manager.markSafeHouseReached();
   assert.equal(manager.saveCheckpoint(99), false);
   const duringTransition = new LevelManager({ storage: save, validateCheckpoint: valid });
@@ -119,7 +119,7 @@ test('Engine progresses beyond level 2, restores Continue, and restarts the curr
   game.start();
   assert.equal(game.makeHud(game.run).level.number, 1);
   assert.equal(game.makeHud(game.run).level.score, 0);
-  assert.equal(game.levels.current.targetScore, 50000);
+  assert.equal(game.levels.current.targetScore, LEVEL_TARGET_SCORE);
   completeLevel(game);
   assert.equal(game.levels.current.number, 2);
   assert.equal(game.levels.levelScore, 0);
@@ -148,7 +148,7 @@ test('A reload during entry replays the last stable level rather than an incompl
   const game = engine(save);
   game.start();
   game.run.elapsed = 5;
-  game.run.bonus = 50000;
+  game.run.bonus = LEVEL_TARGET_SCORE;
   game.step(0);
   for (let i = 0; i < 1800 && game.run.levelPhase !== 'entering'; i++) game.step(1 / 60);
   assert.equal(game.run.levelPhase, 'entering');
@@ -268,7 +268,7 @@ test('Pausing preserves the cinematic phase until the existing game loop resumes
   const game = engine();
   game.start();
   game.run.elapsed = 5;
-  game.run.bonus = 50000;
+  game.run.bonus = LEVEL_TARGET_SCORE;
   game.step(0);
   game.draw = () => {};
   const time = game.run.sceneTime;

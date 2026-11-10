@@ -103,7 +103,13 @@ test('The existing bicycle follows streamed terrain and can perform ordinary jum
     game.step(1 / 60);
     game.terrain.maintain(run.cameraX, 900);
     assert.equal(run.over, false);
-    if (run.rider.grounded) assert.ok(Math.abs(run.rider.y - game.terrainAt(run.rider.x) + 5) < 0.001);
+    // Phase 12 — the exact ground-line contract holds on streamed terrain;
+    // raised track curves (kickers, arcs, bowls, loops) replace the line
+    // while the motorcycle rides them, so those spans are exempt.
+    if (run.rider.grounded && !game.body.onFeature
+      && (run.trackFeatures ?? []).every(f => run.rider.x < f.x0 - 40 || run.rider.x > f.x1 + 40)) {
+      assert.ok(Math.abs(run.rider.y - game.terrainAt(run.rider.x) + 5) < 0.001);
+    }
   }
   assert.ok(run.distance > 30000);
 });
@@ -195,13 +201,19 @@ test('Generated hazards reserve their validated landing corridors', () => {
   const run = game.run;
   run.nextCoinX = 1e12;
   const hazards = [];
-  for (let x = 0; x < 60000; x += 1000) {
+  // Phase 12 — track features claim a share of the schedule now, so the
+  // sweep widens to keep the planner-hazard sample above the floor.
+  for (let x = 0; x < 100000; x += 1000) {
     run.rider.x = x;
     run.cameraX = x - 250;
     game.populateAhead(run);
     game.terrain.maintain(run.cameraX, 900);
     for (const obstacle of run.objects) {
+      // Phase 12 — feature chasms (kicker/gap-run/bowl/arc gaps) are
+      // certified by their track geometry, not the standalone 170 px hazard
+      // validator, so the corridor sample keeps planner-placed hazards only.
       if (['rock', 'tree', 'log', 'gap', 'ramp', 'root', 'fence', 'ice', 'icicle', 'snowball', 'branch'].includes(obstacle.kind)
+        && !obstacle.featureGap
         && !hazards.some(item => item.x === obstacle.x)) hazards.push({ ...obstacle });
     }
   }

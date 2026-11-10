@@ -153,8 +153,15 @@ test('Real rider controls can traverse generated combinations with tap and held 
     game.start();
     const run = game.run;
     run.elapsed = 5;
-    run.objects = plan.obstacles;
-    run.nextCoinX = run.nextHazardX = 1e12;
+    // Phase 12 — the engine owns run.objects and pushes track-feature gaps,
+    // feature coins and powers into it; the plan's array must be copied so
+    // the traversal loop below still iterates planner obstacles only.
+    run.objects = plan.obstacles.slice();
+    // Phase 12 — the track-feature stream (loops, gap runs) plans from the
+    // level's random seed; pinning its cursor keeps the surface plain (the
+    // overridden flat terrainAt) so traversal is deterministic — a fresh
+    // engine with empty storage rolls a new journey seed every run.
+    run.nextCoinX = run.nextHazardX = run.trackNextX = 1e12;
     const first = plan.obstacles[0];
     const start = first.kind === 'ramp' ? first.x - 30 : (first.plan.takeoff.start + first.plan.takeoff.end) / 2 - 2;
     Object.assign(run.rider, { x: start, y: 355, speed, grounded: true, rotation: 0 });

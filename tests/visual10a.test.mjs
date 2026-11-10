@@ -20,7 +20,7 @@ import { mkdirSync, writeFileSync, statSync } from 'node:fs';
 import { moduleUrl } from './loadTypeScript.mjs';
 import { rasterCanvas, encodePng, RasterContext, parseColor } from './raster.mjs';
 
-const { LEVEL_SAVE_KEY, generateLevel } = await import(moduleUrl('src/game/levelManager.ts'));
+const { LEVEL_SAVE_KEY, generateLevel, LEVEL_TARGET_SCORE } = await import(moduleUrl('src/game/levelManager.ts'));
 const { SnowGameEngine } = await import(moduleUrl('src/game/engine.ts'));
 
 const W = 480;
@@ -251,23 +251,48 @@ test('Cadence bob animates the grounded rider within a tight envelope', () => {
   }
   const run = game.run;
   assert.ok(run.rider.grounded, 'riding grounded');
-  const riderX = Math.round(run.rider.x - run.cameraX);
+  // Phase 12 — the motorcycle silhouette is tall, so terrain pitch, the
+  // camera's vertical follow and the suspension squat all move the cap far
+  // more than the 1.3 px cadence bob this test is about. Each sample scans a
+  // line through the rider's LOCAL frame (tilted with the terrain, pivot at
+  // the contact anchor) at a fixed local x, and takes the first dark pixel
+  // along it — undoing the rigid terrain rotation. The cap column (local
+  // x = 14) sits forward of the face-highlight circle (local x ~8), which
+  // would otherwise punch a light hole right at the scan line; the cap's top
+  // edge lands near w = -60.
   const rows = [];
   for (let index = 0; index < 7; index += 1) {
-    const riderY = run.rider.y;
     const raster = rasterFrame(game);
+    // Capture the anchor and pitch of the frame just rendered (frame()
+    // updates before drawing), so the scan below lines up with the pixels.
+    // The scene is drawn inside context.translate(shakeX, cameraY), so the
+    // rider's on-screen anchor carries the smoothed vertical camera follow
+    // (run.cameraY) and any crash shake — without them the camera's
+    // terrain-tracking lag would swamp the 1.3 px bob this test measures.
+    const shakeX = Math.sin(game.clock * 78) * run.shake;
+    const riderX = run.rider.x - run.cameraX + shakeX;
+    const riderY = run.rider.y + run.cameraY;
+    const rotation = run.rider.rotation;
     ride(game, 4, { jump: null, fast: false }); // ~0.07s apart — sub-bob sampling
-    // The band is rider-relative: the camera's vertical follow shifts the
-    // whole scene, so a fixed screen band would miss the rider on slopes.
-    // The row is measured relative to the rider's own y so terrain undulation
-    // under the wheels does not count as bob.
-    const row = topmostRow(raster, riderX - 16, riderX + 20, riderY - 80, riderY + 12, riderDark);
-    assert.ok(row > 0, 'the rider silhouette is visible');
-    rows.push(row - riderY);
+    let capTop = null;
+    for (let w = -68; w <= -50; w += 0.5) {
+      const x = riderX + 14 * Math.cos(rotation) - w * Math.sin(rotation);
+      const y = riderY + 14 * Math.sin(rotation) + w * Math.cos(rotation);
+      if (riderDark(pixel(raster, Math.round(x), Math.round(y)))) { capTop = w; break; }
+    }
+    assert.ok(capTop !== null, 'the rider cap is visible in the local scan');
+    rows.push(capTop);
   }
   const spread = Math.max(...rows) - Math.min(...rows);
   assert.ok(spread >= 0.5, `the grounded rider animates vertically (spread ${spread.toFixed(1)}px)`);
-  assert.ok(spread <= 4, `the bob stays subtle (spread ${spread.toFixed(1)}px)`);
+  // Phase 12 — the envelope is scaled to the motorcycle silhouette: the cap
+  // rides ~60 px above the contact line (the classic snowboarder's whole
+  // silhouette was ~35 px), so the same visual subtlety admits proportionally
+  // more absolute motion. The de-rotated local scan already removes the
+  // dominant terrain-pitch term (~55 px/rad); what remains is the cadence bob
+  // plus small common-mode slop (sub-pixel edges, glow rim on the cap, camera
+  // micro-lag).
+  assert.ok(spread <= 6, `the bob stays subtle (spread ${spread.toFixed(1)}px)`);
 });
 
 // ── 3. night crest rim (rasterized frames) ──────────────────────────────
@@ -385,7 +410,9 @@ test('Level completion adds roof sparks and a warm celebration glow', () => {
   const game = makeEngine(seedSave(4242, 12));
   game.setDayPhasePreview(0.4);
   ride(game, 200);
-  game.run.bonus += 60000;
+  // Phase 12 — the level target rose to 150 000; the forced bonus scales
+  // with it so the arrival gate opens as it did at the old 50 000 target.
+  game.run.bonus += LEVEL_TARGET_SCORE + 10000;
   let settle = 0;
   while (game.run.levelPhase === 'riding' && settle < 240) {
     game.clock += 1 / 60;
