@@ -1,5 +1,5 @@
 import { BICYCLE_PHYSICS, flipProgress } from './riderPhysics';
-import { OBSTACLE_REGISTRY } from './obstacleRegistry';
+import { ICE_BOULDER, OBSTACLE_REGISTRY } from './obstacleRegistry';
 export { BICYCLE_PHYSICS } from './riderPhysics';
 import { createLevelRandom, type EnvironmentTheme, type LevelConfiguration, type TerrainBias } from './levelManager';
 
@@ -29,6 +29,8 @@ const smooth = (t: number) => t * t * t * (t * (t * 6 - 15) + 10);
 
 export class TerrainGenerator {
   private readonly chunks = new Map<number, TerrainChunk>();
+  /** Phase 13 — memoised clamped anchors (see anchor()). */
+  private readonly anchors = new Map<number, number>();
   generatedChunks = 0;
   /** Phase 9C — per-level statistical bias (neutral for levels 1–4). */
   private readonly bias: TerrainBias;
@@ -56,10 +58,36 @@ export class TerrainGenerator {
     return false;
   }
 
+  /**
+   * Chunk-boundary anchor height. Phase 13 — the quintic's max derivative
+   * (1.875) bounds each chunk's slope by |Δ|·1.875/640, so adjacent anchors
+   * are clamped to the slope-safe span (TERRAIN_MAX_SLOPE·640/1.875 ≈ 116px).
+   * Deep mountain biases can now chain full-range draws into sustained
+   * peak-and-valley runs without ever breaching the cap — including the very
+   * high levels where the grown heightScale used to creep past it. The chain
+   * is walked iteratively and memoised, and recovery-adjacent bases return 0
+   * exactly as before, so determinism and levels 1–4 are unchanged.
+   */
   private anchor(index: number): number {
     if (index <= 1 || this.recovery(index) || this.recovery(index - 1)) return 0;
+    const cached = this.anchors.get(index);
+    if (cached !== undefined) return cached;
     const range = PROFILES[this.configuration.environment].range * this.configuration.terrain.heightScale * this.bias.rangeScale;
-    return (this.random(index, 0xabc37) * 2 - 1) * range;
+    const limit = (TERRAIN_MAX_SLOPE * TERRAIN_CHUNK_WIDTH) / 1.875;
+    // Walk down to the nearest known base, then clamp forward.
+    const chain: number[] = [];
+    let current = index;
+    while (current > 1 && !this.anchors.has(current) && !this.recovery(current) && !this.recovery(current - 1)) {
+      chain.push(current);
+      current -= 1;
+    }
+    let previous = current <= 1 || this.recovery(current) || this.recovery(current - 1) ? 0 : this.anchors.get(current)!;
+    for (const step of chain.reverse()) {
+      const draw = (this.random(step, 0xabc37) * 2 - 1) * range;
+      previous = Math.max(previous - limit, Math.min(previous + limit, draw));
+      this.anchors.set(step, previous);
+    }
+    return previous;
   }
 
   chunk(index: number): TerrainChunk {
@@ -458,6 +486,66 @@ export function validateSnowball(
   // the ball (retuned for the shorter Phase 11 jump reach: takeoff x-120).
   return validateLanding(heightAt, x - 120, heightAt(x - 120) - 5, x + 53,
     { x, radius: 53, height: 30 }, options);
+}
+
+/**
+ * Phase 13 — deep valley gorge: a wide, fatal gap placed only where the
+ * terrain genuinely forms a valley neck. The far side must rise into the next
+ * mountain section (canvas convention: higher altitude = smaller y), the far
+ * lip's immediate landing ground must stay gentle, and the standard gap
+ * guarantees — takeoff slope, crest-launch arcs at top speed, reachable
+ * landing at every speed in the envelope — all apply unchanged. Riders who
+ * miss the jump fall in and crash, exactly like every other gap.
+ */
+export function validateGorge(
+  heightAt: (x: number) => number, x: number, width: number, options?: TraversalOptions,
+): LandingValidation {
+  if (!Number.isFinite(width) || width < 88 || width > 150) {
+    return { safe: false, clearUntil: x, reason: 'Gorge width outside validated limits' };
+  }
+  const takeoff = x - 55;
+  const approachSlope = Math.abs((heightAt(x) - heightAt(takeoff)) / 55);
+  if (approachSlope > 0.18) return { safe: false, clearUntil: x, reason: 'Takeoff slope too steep' };
+  // The valley neck: the next mountain section's wall must stand at least
+  // 14px above this lip within ~130px past the far edge.
+  const farLift = heightAt(x) - Math.min(heightAt(x + width + 60), heightAt(x + width + 130));
+  if (farLift < 14) return { safe: false, clearUntil: x, reason: 'Far side does not rise into a mountain wall' };
+  const landingSlope = Math.abs((heightAt(x + width + 90) - heightAt(x + width + 10)) / 80);
+  if (landingSlope > 0.22) return { safe: false, clearUntil: x, reason: 'Far lip landing ground too steep' };
+  const airborne = validateGapAgainstCrestLaunch(heightAt, x, width);
+  if (!airborne.safe) return airborne;
+  return validateLanding(heightAt, takeoff, heightAt(takeoff) - 5, x + width, undefined, options);
+}
+
+/**
+ * Phase 13 — giant rolling ice boulder. The spawn ledge must fall away toward
+ * the rider (the rider's uphill: heightAt decreasing with x) so gravity
+ * genuinely carries the boulder into the approach, and the whole meeting
+ * corridor must be clearable in one jump wherever rider and boulder cross:
+ * three representative meeting spots, each validated as a static
+ * radius+padding-wide, height-tall envelope with a takeoff 140px earlier —
+ * the same envelope the runtime collision uses.
+ */
+export function validateIceBoulder(
+  heightAt: (x: number) => number, x: number, options?: TraversalOptions,
+): LandingValidation {
+  const slope = (heightAt(x + 80) - heightAt(x - 80)) / 160;
+  if (slope > -0.05) return { safe: false, clearUntil: x, reason: 'Boulder ledge does not fall away toward the rider' };
+  if (slope < -0.3) return { safe: false, clearUntil: x, reason: 'Boulder ledge too steep to read' };
+  const corridor = { radius: ICE_BOULDER.radius + BICYCLE_PHYSICS.collisionPadding, height: ICE_BOULDER.height };
+  for (const meet of [x - 420, x - 280, x - 140]) {
+    const envelope = { x: meet, radius: corridor.radius, height: corridor.height };
+    const check = validateLanding(heightAt, meet - 140, heightAt(meet - 140) - 5, meet + corridor.radius, envelope, options);
+    if (!check.safe) {
+      return { safe: false, clearUntil: x, reason: `Boulder meeting zone @${Math.round(meet)}: ${check.reason ?? 'trajectory rejected'}` };
+    }
+  }
+  return {
+    safe: true,
+    clearUntil: x + 60,
+    takeoff: { start: x - 560, end: x - 140 },
+    landing: { start: x - 420, end: x + 60 },
+  };
 }
 
 export function validateRampGap(

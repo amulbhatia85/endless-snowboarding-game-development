@@ -457,10 +457,12 @@ const SNOWY: EnvironmentDefinition = {
     },
   ],
   layers: [
-    { parallax: 0.05, baseY: 0.4, amplitude: 0.2, roughness: 0.9, snowcap: 0.85, treeline: 0, color: '#c6d7e6' },
-    { parallax: 0.12, baseY: 0.54, amplitude: 0.13, roughness: 0.6, snowcap: 0.6, treeline: 0.05, color: '#d6e3ef' },
-    { parallax: 0.24, baseY: 0.66, amplitude: 0.085, roughness: 0.35, snowcap: 0.35, treeline: 0.25, color: '#e3edf5' },
-    { parallax: 0.38, baseY: 0.75, amplitude: 0.055, roughness: 0.2, snowcap: 0.15, treeline: 0.4, color: '#eef4fa' },
+    // Phase 13 — the far ranges climb higher and read more jagged so the
+    // alpine background carries the new gorges and elevated peaks.
+    { parallax: 0.05, baseY: 0.37, amplitude: 0.27, roughness: 0.95, snowcap: 0.9, treeline: 0, color: '#c6d7e6' },
+    { parallax: 0.12, baseY: 0.52, amplitude: 0.17, roughness: 0.68, snowcap: 0.65, treeline: 0.05, color: '#d6e3ef' },
+    { parallax: 0.24, baseY: 0.66, amplitude: 0.095, roughness: 0.4, snowcap: 0.38, treeline: 0.22, color: '#e3edf5' },
+    { parallax: 0.38, baseY: 0.75, amplitude: 0.06, roughness: 0.24, snowcap: 0.18, treeline: 0.38, color: '#eef4fa' },
   ],
   fogColor: '#eef4f8',
   fogVeil: [0.1, 0.05, 0.03, 0.02],

@@ -58,6 +58,8 @@ export class AudioManager {
   private leaves!: Loop;
   /** Phase 10B — leaf-litter crackle under the wheels (moonlit forest). */
   private crackle!: Loop;
+  /** Phase 13 — deep rolling rumble of an oncoming giant ice boulder. */
+  private rumble!: Loop;
   /**
    * Phase 10B — rare-challenge tension: two detuned saws a minor ninth
    * apart behind a dark lowpass, slowly breathing. Gain rests at 0.
@@ -210,6 +212,9 @@ export class AudioManager {
     this.leaves = this.makeLoop('bandpass', 1650, 0.8, this.ambientBus);
     // Phase 10B — dry leaf litter under the wheels (bandpass centre 2.4 kHz).
     this.crackle = this.makeLoop('bandpass', 2400, 1.6, this.sfxBus);
+    // Phase 13 — the ice boulder's seismic approach: filtered noise centred
+    // near 90 Hz, grounded in the sfx bus and silent until a boulder nears.
+    this.rumble = this.makeLoop('lowpass', 90, 0.8, this.sfxBus);
 
     // Phase 10B — tension drone (rare-challenge events). D2 vs Eb2: a minor
     // ninth, filtered very dark and pulsed by a slow tremolo so it reads as
@@ -498,6 +503,13 @@ export class AudioManager {
     // never while airborne.
     const crackleLevel = playing && s.moving && s.grounded && s.theme === 'moonlit-forest' ? 0.012 + s.speed * 0.02 : 0;
     this.crackle.gain.gain.setTargetAtTime(crackleLevel, now, tc);
+
+    // Phase 13 — the boulder rumble swells with proximity and rolls faster
+    // (brighter + a slow wobble) as the mass closes in.
+    const ice = Math.max(0, Math.min(1, s.rollingIce ?? 0));
+    const rumbleLevel = playing ? ice * ice * 0.2 : 0;
+    this.rumble.gain.gain.setTargetAtTime(rumbleLevel, now, 0.22);
+    this.rumble.filter.frequency.setTargetAtTime(72 + ice * 70, now, 0.3);
 
     // Wind – speed, air time, steep downhill and storms all push it up
     const airborne = playing && !s.grounded;
@@ -891,6 +903,11 @@ export class AudioManager {
       case 'crash':
         this.crash(e.kind);
         break;
+      case 'iceCrush':
+        // Phase 13 — a boulder smashing through an obstacle: the same
+        // crystalline shatter, scaled by the impact force.
+        this.iceShatter(now, Math.max(0.3, Math.min(1, e.force)));
+        break;
       case 'power':
         this.powerCue(e.kind, e.phase === 'start');
         break;
@@ -993,7 +1010,27 @@ export class AudioManager {
     this.noiseHit({ t, dur: 1.1, type: 'bandpass', f0: 2200, f1: 600, q: 0.6, gain: 0.06, attack: 0.05 });
   }
 
-  private crash(kind: 'rock' | 'tree' | 'landing' | 'fall'): void {
+  /**
+   * Phase 13 — crystalline ice shatter: bright glassy noise bursts, a fan of
+   * detuned high pings and a deep body thud. `force` 0..1 scales everything.
+   */
+  private iceShatter(t: number, force: number): void {
+    this.noiseHit({ t, dur: 0.16, type: 'bandpass', f0: 3200, q: 2.2, gain: 0.2 * force });
+    this.noiseHit({ t: t + 0.04, dur: 0.5, type: 'bandpass', f0: 3600, f1: 900, q: 1.2, gain: 0.14 * force, attack: 0.04 });
+    this.noiseHit({ t: t + 0.12, dur: 0.7, type: 'highpass', f0: 2400, gain: 0.07 * force, attack: 0.1, wet: 0.5 });
+    for (let index = 0; index < 5; index += 1) {
+      this.tone({
+        t: t + 0.02 + index * 0.035,
+        freq: 1500 + Math.random() * 2100,
+        freqEnd: 820,
+        dur: 0.13,
+        gain: 0.05 * force,
+      });
+    }
+    this.tone({ t, freq: 96, freqEnd: 34, dur: 0.42, gain: 0.34 * force });
+  }
+
+  private crash(kind: 'rock' | 'tree' | 'landing' | 'fall' | 'ice'): void {
     const now = this.ctx!.currentTime;
     this.stopSpinWhoosh();
     if (kind === 'rock') {
@@ -1005,6 +1042,11 @@ export class AudioManager {
       this.tone({ t: now + 0.05, freq: 160, freqEnd: 100, type: 'triangle', dur: 0.12, gain: 0.15 });
       this.noiseHit({ t: now + 0.05, dur: 0.9, type: 'lowpass', f0: 1800, f1: 400, gain: 0.12, attack: 0.08, wet: 0.4 }); // snow off branches
       this.tumble(now + 0.12, 3);
+    } else if (kind === 'ice') {
+      // Phase 13 — the rider is bowled over by the giant ice boulder: a
+      // full-force crystalline shatter on impact, then the tumble.
+      this.iceShatter(now, 1);
+      this.tumble(now + 0.1, 4);
     } else if (kind === 'landing') {
       this.tumble(now, 5);
     } else {

@@ -211,6 +211,8 @@ const DEV_OBSTACLES: { id: string; label: string }[] = [
   { id: 'snowball', label: 'Snowball' },
   { id: 'swinging-log', label: 'Swinging log' },
   { id: 'branch', label: 'Falling branch' },
+  { id: 'gorge', label: 'Deep valley gorge' },
+  { id: 'ice-boulder', label: 'Giant ice boulder' },
 ];
 
 export default function App() {

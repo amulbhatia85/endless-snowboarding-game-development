@@ -106,7 +106,7 @@ function makeEngine(save) {
   return game;
 }
 
-const HAZ = ['rock', 'log', 'tree', 'gap', 'ramp', 'swinging-log', 'root', 'fence', 'ice', 'icicle', 'snowball', 'branch'];
+const HAZ = ['rock', 'log', 'tree', 'gap', 'ramp', 'swinging-log', 'root', 'fence', 'ice', 'icicle', 'snowball', 'branch', 'ice-boulder'];
 
 function controllerJump(game) {
   const run = game.run;

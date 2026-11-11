@@ -15,13 +15,13 @@
 
 import { BICYCLE_PHYSICS } from './riderPhysics';
 import {
-  OBSTACLE_REGISTRY, branchPose, iciclePose, platformBob, snowballPose, swingingLogPose,
+  OBSTACLE_REGISTRY, branchPose, iciclePose, iceBoulderPose, platformBob, snowballPose, swingingLogPose,
 } from './obstacleRegistry';
 
 /** Anything the planner can place (subset of PlannedObstacle fields). */
 export interface FeasibleObstacle {
   kind: 'rock' | 'log' | 'tree' | 'gap' | 'ramp' | 'swinging-log'
-    | 'root' | 'fence' | 'ice' | 'icicle' | 'snowball' | 'branch';
+    | 'root' | 'fence' | 'ice' | 'icicle' | 'snowball' | 'branch' | 'ice-boulder';
   x: number;
   width?: number;
   bridged?: boolean;
@@ -137,11 +137,13 @@ export function validateObstaclePlacement(
   // survivable strategy — ride through at some speed in the envelope, or jump
   // over (every hazard is shorter than the jump apex) and land inside the
   // validated clear corridor.
-  if (obstacle.kind === 'icicle' || obstacle.kind === 'branch' || obstacle.kind === 'snowball' || obstacle.kind === 'swinging-log') {
+  if (obstacle.kind === 'icicle' || obstacle.kind === 'branch' || obstacle.kind === 'snowball' || obstacle.kind === 'swinging-log'
+    || obstacle.kind === 'ice-boulder') {
     const cycle = obstacle.kind === 'icicle' ? 4.2
       : obstacle.kind === 'branch' ? 5.0
         : obstacle.kind === 'snowball' ? (Math.PI * 2) / 0.85
-          : (Math.PI * 2) / 1.5;
+          : obstacle.kind === 'ice-boulder' ? 4.2
+            : (Math.PI * 2) / 1.5;
     const radius = OBSTACLE_REGISTRY[obstacle.kind].collision!.radius;
     const height = OBSTACLE_REGISTRY[obstacle.kind].collision!.height;
     const phase = obstacle.phase ?? 0;
@@ -157,6 +159,14 @@ export function validateObstaclePlacement(
         const tip = obstacle.kind === 'icicle' ? pose.y : pose.y + 12;
         return tip > y - 36 && tip < y + 8;
       }
+      if (obstacle.kind === 'ice-boulder') {
+        // The gravity-integrated roll: the sample offset shifts the release
+        // time, sweeping the boulder's progress across every meeting the
+        // rider could walk into.
+        const pose = iceBoulderPose(obstacle.x, surface, elapsed, phase);
+        if (Math.abs(x - pose.x) > radius + BICYCLE_PHYSICS.collisionPadding) return false;
+        return y + BICYCLE_PHYSICS.collisionBottom > surface(pose.x) - height + BICYCLE_PHYSICS.collisionInset;
+      }
       if (obstacle.kind === 'snowball') {
         const slope = (surface(obstacle.x + 40) - surface(obstacle.x - 40)) / 80;
         const pose = snowballPose(obstacle.x, slope, elapsed, phase);
@@ -168,7 +178,7 @@ export function validateObstaclePlacement(
       if (y - 30 >= pose.y + height / 2) return false;
       return y + BICYCLE_PHYSICS.collisionBottom > pose.y - height / 2 + BICYCLE_PHYSICS.collisionInset;
     };
-    const samples = obstacle.kind === 'snowball' || obstacle.kind === 'swinging-log' ? 24 : 28;
+    const samples = obstacle.kind === 'snowball' || obstacle.kind === 'swinging-log' || obstacle.kind === 'ice-boulder' ? 24 : 28;
     let safeRide = 0;
     let safeOverall = 0;
     for (let index = 0; index < samples; index += 1) {
@@ -187,13 +197,16 @@ export function validateObstaclePlacement(
       // Jump strategy: take off 140px early. The arc clears the hazard
       // vertically (every hazard is far shorter than the ~143px apex) and must
       // land inside the validated clear corridor before the next plan.
-      const jumpOk = SPEED_GRID.some((speed) => {
-        const takeoff = obstacle.x - 140;
+      // Phase 13 — a head-on boulder lets the rider choose when to commit, so
+      // its strategy space samples several takeoff distances, not just one.
+      const takeoffOffsets = obstacle.kind === 'ice-boulder' ? [120, 200, 280, 360] : [140];
+      const jumpOk = SPEED_GRID.some((speed) => takeoffOffsets.some((offset) => {
+        const takeoff = obstacle.x - offset;
         const boost = Math.min(BICYCLE_PHYSICS.maxJumpBoost, speed * BICYCLE_PHYSICS.jumpSpeedFactor);
         let vy = -(BICYCLE_PHYSICS.jumpVelocity + boost);
         let x = takeoff;
         let y = groundedY(surface, x);
-        let elapsed = arrival - 140 / speed;
+        let elapsed = arrival - offset / speed;
         for (let frame = 0; frame < 480; frame += 1) {
           x += speed * DELTA;
           vy += BICYCLE_PHYSICS.gravity * DELTA;
@@ -204,7 +217,7 @@ export function validateObstaclePlacement(
         }
         const landingSlope = Math.abs((surface(x + 20) - surface(x - 20)) / 40);
         return x <= clearUntil + 450 && landingSlope <= 0.42;
-      });
+      }));
       if (rideOk || jumpOk) safeOverall += 1;
     }
     if (safeOverall / samples < 0.999) fail(`${samples - safeOverall} of ${samples} arrival phases have no survivable strategy`);

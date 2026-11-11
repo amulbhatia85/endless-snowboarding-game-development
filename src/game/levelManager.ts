@@ -43,7 +43,7 @@ const NEUTRAL_BIAS: TerrainBias = { rangeScale: 1, bumpScale: 1, recoveryScale: 
 /** The seven generated identities (levels ≥ 5). `classic` is the neutral prefix profile. */
 const PROFILE_BIASES: Record<Exclude<LevelProfileId, 'classic'>, TerrainBias> = {
   'flowing-hills': { rangeScale: 0.9, bumpScale: 0.85, recoveryScale: 1.25, valleyBias: 0.04 },
-  'mountain-descent': { rangeScale: 1.25, bumpScale: 0.7, recoveryScale: 0.8, valleyBias: -0.06 },
+  'mountain-descent': { rangeScale: 1.55, bumpScale: 0.55, recoveryScale: 0.55, valleyBias: 0.12 },
   'gradual-climb': { rangeScale: 0.95, bumpScale: 0.6, recoveryScale: 1.3, valleyBias: 0.06 },
   'rolling-valleys': { rangeScale: 1.05, bumpScale: 1.1, recoveryScale: 0.95, valleyBias: 0.12 },
   'technical-slopes': { rangeScale: 1.1, bumpScale: 1.3, recoveryScale: 0.6, valleyBias: -0.1 },
@@ -123,8 +123,8 @@ export interface LevelConfiguration {
 const THEMES: readonly EnvironmentTheme[] = ['countryside', 'snowy-mountains', 'misty-mountains', 'moonlit-forest', 'jungle'];
 const THEME_CONFIG = {
   countryside: { name: 'Green Hills', obstacles: ['rock', 'log', 'tree', 'root', 'fence', 'ramp', 'gap', 'bridge'], weather: 'clear', intensity: 0, speed: 1 },
-  'snowy-mountains': { name: 'Snowfall Adventure', obstacles: ['rock', 'log', 'ice', 'icicle', 'snowball', 'gap', 'ramp', 'bridge'], weather: 'snow', intensity: 0.5, speed: 0.38 },
-  'misty-mountains': { name: 'Misty Mountains', obstacles: ['rock', 'gap', 'cliff', 'bridge', 'broken-bridge', 'ramp', 'log', 'moving-platform'], weather: 'mist', intensity: 0.4, speed: 0.4 },
+  'snowy-mountains': { name: 'Snowfall Adventure', obstacles: ['rock', 'log', 'ice', 'icicle', 'snowball', 'gap', 'ramp', 'bridge', 'gorge', 'ice-boulder'], weather: 'snow', intensity: 0.5, speed: 0.38 },
+  'misty-mountains': { name: 'Misty Mountains', obstacles: ['rock', 'gap', 'cliff', 'bridge', 'broken-bridge', 'ramp', 'log', 'moving-platform', 'gorge'], weather: 'mist', intensity: 0.4, speed: 0.4 },
   'moonlit-forest': { name: 'Moonlit Forest', obstacles: ['tree', 'rock', 'root', 'branch', 'log', 'swinging-log', 'gap'], weather: 'night', intensity: 0.35, speed: 0.5 },
   // Phase 11 — the fifth environment: a dense canopy world of vines, ruin
   // stones and river crossings. Owns the timed-hazard families early

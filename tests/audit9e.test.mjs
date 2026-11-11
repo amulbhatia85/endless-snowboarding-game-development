@@ -18,7 +18,7 @@ const { SnowGameEngine } = await import(moduleUrl('src/game/engine.ts'));
 
 const THEMES = ['countryside', 'snowy-mountains', 'misty-mountains', 'moonlit-forest'];
 const SEEDS = [7, 4242, 999999];
-const HAZARD_KINDS = ['rock', 'log', 'tree', 'gap', 'ramp', 'swinging-log', 'root', 'fence', 'ice', 'icicle', 'snowball', 'branch'];
+const HAZARD_KINDS = ['rock', 'log', 'tree', 'gap', 'ramp', 'swinging-log', 'root', 'fence', 'ice', 'icicle', 'snowball', 'branch', 'ice-boulder'];
 const LEVEL_LENGTH_PX = 40000; // ≈ the 50k-point target distance
 
 // ───────────────────────── harness ─────────────────────────
