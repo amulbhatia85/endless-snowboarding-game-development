@@ -109,6 +109,29 @@ const POWER_KINDS = new Set<string>(POWER_ORDER);
  *  overhead hazards and ground patches are left standing. */
 const BOULDER_CRUSHABLE: ReadonlySet<string> = new Set(['rock', 'log', 'tree', 'root', 'fence', 'snowball']);
 
+/**
+ * Phase 14 — the crash cinematic, timed from the same RECOVERY_CONFIG values
+ * the engine integrates. The App layer uses this to delay the "Keep going?"
+ * card until the impact has fully read: hit-stop → slow-motion tumble →
+ * settle → a short frozen hold (background blur fades in during the hold).
+ */
+function crashCinematicDuration(): number {
+  const { crashHitStopSeconds: hit, crashSlowMoSeconds: slow, crashSlowMoScale: scale, crashTumbleSeconds: tumble } = RECOVERY_CONFIG;
+  const scaled = hit * CRASH_HIT_STOP_SCALE + slow * scale;
+  return hit + slow + Math.max(0, tumble - scaled) + RECOVERY_CONFIG.crashSettleHoldSeconds;
+}
+/** Near-zero flow during the hit-stop: the impact frame is held, not shaken. */
+const CRASH_HIT_STOP_SCALE = 0.06;
+export const CRASH_CINEMATIC_MS = Math.round(crashCinematicDuration() * 1000);
+/** How long before the card appears the background blur should start. */
+export const CRASH_BLUR_LEAD_MS = 460;
+/** Phase 14 — deterministic 0..1 jitter for boulder trail detail: keyed to
+ *  world x so the mounds and scattered chunks stay pinned, never shimmer. */
+function boulderJitter(x: number): number {
+  const noise = Math.sin(x * 12.9898) * 43758.5453;
+  return noise - Math.floor(noise);
+}
+
 type ObstacleKind = 'coin' | 'rock' | 'tree' | 'gap' | 'ramp' | 'log' | 'swinging-log'
   | 'root' | 'fence' | 'ice' | 'icicle' | 'snowball' | 'branch' | 'ice-boulder' | PowerKind;
 
@@ -226,7 +249,7 @@ interface RunState {
   flipsThisLevel: number;
   levelReward: LevelRewardBreakdown | null;
   /** Phase 8 — cosmetic crash tumble state; present only while over. */
-  crashReaction?: { vx: number; vy: number; spin: number; elapsed: number };
+  crashReaction?: { vx: number; vy: number; spin: number; elapsed: number; real: number };
 }
 
 // Phase 4: all visual theming (palettes, parallax, weather, decorations) now
@@ -428,6 +451,10 @@ export class SnowGameEngine {
   private obstaclePreview?: string;
   /** Phase 13 — last run-elapsed second an ice-boulder crush cue fired (rate gate). */
   private lastIceCrushCue = -1;
+  /** Phase 14 — current crash-cinematic time scale (1 = normal flow). The
+   *  renderer reads it so the impact shake sways with the slow-motion instead
+   *  of rattling at full speed through the hit-stop. */
+  private crashTimeScale = 1;
 
   // Phase 5 — intelligent difficulty & obstacle pacing. The manager emits a
   // pure, viewport-independent directive each planning pass; the planner (not
@@ -1789,6 +1816,12 @@ export class SnowGameEngine {
     run.cameraY += (cameraTargetY - run.cameraY) * (1 - Math.exp(-2.8 * delta));
     this.addTrail(run, delta);
     this.emitWheelSnow(run, delta);
+    // Phase 13/14 — the dynamic boulder pass (crush-through, snow
+    // displacement, proximity tremor) belongs to the riding step: the
+    // method itself guards on levelPhase === 'riding', so a call from the
+    // level-scene path could never fire. Wired here, the boulder's weight
+    // is actually simulated during play.
+    this.updateIceBoulders(run);
     this.updateEffects(run, delta);
     this.populateAhead(run);
 
@@ -1975,7 +2008,6 @@ export class SnowGameEngine {
       this.addTrail(run, delta);
       this.emitWheelSnow(run, delta);
     }
-    this.updateIceBoulders(run);
     this.updateEffects(run, delta);
     run.hudTimer += delta;
     if (run.hudTimer >= 0.12) {
@@ -2207,6 +2239,7 @@ export class SnowGameEngine {
       vy: run.rider.grounded ? RECOVERY_CONFIG.crashTumblePopVelocity : Math.min(run.rider.vy, 0),
       spin: RECOVERY_CONFIG.crashTumbleSpin,
       elapsed: 0,
+      real: 0,
     };
     this.syncLevelScore(run);
     this.held = false;
@@ -2334,18 +2367,37 @@ export class SnowGameEngine {
       this.suspensionVelocity += spring * delta;
       this.suspension = clamp(this.suspension + this.suspensionVelocity * delta, -0.18, 1);
     }
+    // Phase 14 — the crash cinematic. The aftermath no longer runs at full
+    // speed behind an instantly-revealed popup: a hit-stop holds the impact
+    // frame, then a slow-motion window stretches the fall so the player reads
+    // exactly how and where they lost it. Everything cosmetic in this method
+    // (tumble, particles, trail, popups, shake decay) integrates the scaled
+    // delta so the whole scene breathes together; the sky and weather outside
+    // keep real time, which sells the effect.
+    const reaction = run.crashReaction;
+    let effectsDelta = delta;
+    if (run.over && reaction) {
+      reaction.real += delta;
+      const sinceImpact = reaction.real;
+      const scale = sinceImpact < RECOVERY_CONFIG.crashHitStopSeconds ? CRASH_HIT_STOP_SCALE
+        : sinceImpact < RECOVERY_CONFIG.crashHitStopSeconds + RECOVERY_CONFIG.crashSlowMoSeconds ? RECOVERY_CONFIG.crashSlowMoScale
+          : 1;
+      this.crashTimeScale = scale;
+      effectsDelta = delta * scale;
+    } else {
+      this.crashTimeScale = 1;
+    }
     // Phase 8 — the crash tumble plays out while the crashed scene is on
     // screen (the frame loop keeps calling this for paused/crashed/gameover).
-    const reaction = run.crashReaction;
     if (run.over && reaction && reaction.elapsed < RECOVERY_CONFIG.crashTumbleSeconds) {
-      reaction.elapsed += delta;
+      reaction.elapsed += effectsDelta;
       const rider = run.rider;
-      rider.x += reaction.vx * delta;
-      reaction.vx *= Math.exp(-RECOVERY_CONFIG.crashTumbleSlideDecay * delta);
-      reaction.vy += 1_500 * delta;
-      rider.y += reaction.vy * delta;
-      rider.rotation += reaction.spin * delta;
-      reaction.spin *= Math.exp(-RECOVERY_CONFIG.crashTumbleSpinDecay * delta);
+      rider.x += reaction.vx * effectsDelta;
+      reaction.vx *= Math.exp(-RECOVERY_CONFIG.crashTumbleSlideDecay * effectsDelta);
+      reaction.vy += 1_500 * effectsDelta;
+      rider.y += reaction.vy * effectsDelta;
+      rider.rotation += reaction.spin * effectsDelta;
+      reaction.spin *= Math.exp(-RECOVERY_CONFIG.crashTumbleSpinDecay * effectsDelta);
       // Stop the slide against a solid obstacle; settle on the surface
       // unless the rider is inside a gap (they keep falling, as they should).
       const blocked = run.objects.some((object) =>
@@ -2365,20 +2417,17 @@ export class SnowGameEngine {
     // Phase 10C — particles, trail and popups compact in place. The old
     // .filter() rebuilt all three arrays every frame (three allocations per
     // frame feeding the GC); the write-index compaction below is allocation
-    // free and keeps identical ordering semantics.
-    // Phase 10C — particles, trail and popups compact in place. The old
-    // .filter() rebuilt all three arrays every frame (three allocations per
-    // frame feeding the GC); the write-index compaction below is allocation
-    // free and keeps identical ordering semantics.
+    // free and keeps identical ordering semantics. Phase 14 — they all run on
+    // the cinematic delta so snow hangs in the air during the slow-motion.
     {
       const particles = run.particles;
       let keep = 0;
       for (let index = 0; index < particles.length; index += 1) {
         const particle = particles[index];
-        particle.life -= delta;
-        particle.x += particle.vx * delta;
-        particle.y += particle.vy * delta;
-        particle.vy += 250 * delta;
+        particle.life -= effectsDelta;
+        particle.x += particle.vx * effectsDelta;
+        particle.y += particle.vy * effectsDelta;
+        particle.vy += 250 * effectsDelta;
         const settled = particle.wheelSnow && particle.vy > 0 && particle.y >= this.terrainAt(particle.x) && !this.gapAt(run, particle.x);
         if (particle.life > 0 && !settled) {
           particles[keep] = particle;
@@ -2390,7 +2439,7 @@ export class SnowGameEngine {
       let trailKeep = 0;
       for (let index = 0; index < trail.length; index += 1) {
         const point = trail[index];
-        point.age += delta;
+        point.age += effectsDelta;
         if (point.age < 0.48) {
           trail[trailKeep] = point;
           trailKeep += 1;
@@ -2401,8 +2450,8 @@ export class SnowGameEngine {
       let popupKeep = 0;
       for (let index = 0; index < popups.length; index += 1) {
         const popup = popups[index];
-        popup.life -= delta;
-        popup.y -= 19 * delta;
+        popup.life -= effectsDelta;
+        popup.y -= 19 * effectsDelta;
         if (popup.life > 0) {
           popups[popupKeep] = popup;
           popupKeep += 1;
@@ -2410,7 +2459,7 @@ export class SnowGameEngine {
       }
       popups.length = popupKeep;
     }
-    run.shake *= Math.exp(-7.5 * delta);
+    run.shake *= Math.exp(-7.5 * effectsDelta);
   }
 
   /**
@@ -2434,12 +2483,23 @@ export class SnowGameEngine {
         continue;
       }
       const groundY = this.terrainAt(pose.x);
-      // Snow displacement: a kicked-up puff every ~34px of roll, on screen only.
-      if (pose.x < marker.sprayX - 34) {
+      // Phase 14 — snow displacement with real weight: every ~26px of roll
+      // the leading face bulldozes a plume off the contact point and the
+      // wake churns a second, lazier spray out the back. On screen only.
+      if (pose.x < marker.sprayX - 26) {
         marker.sprayX = pose.x;
         if (pose.x - run.cameraX > -80 && pose.x - run.cameraX < this.width + 80) {
-          this.burst(run, pose.x + ICE_BOULDER.radius * 0.4, groundY - 4, 2, '#f4fbff', 95, -55);
+          this.burst(run, pose.x + ICE_BOULDER.radius * 0.55, groundY - 5, 5, '#f4fbff', 150, -95);
+          this.burst(run, pose.x - ICE_BOULDER.radius * 0.4, groundY - 3, 3, '#e6f3fb', 100, -70);
         }
+      }
+      // Phase 14 — the mass announces itself through the ground: a subtle
+      // tremor that swells as the boulder closes (crash shake is ~13, so
+      // this stays a whisper — felt weight, never camera fight).
+      const closing = pose.x - run.rider.x;
+      if (closing > -140 && closing < 900) {
+        const tremor = 1.4 * (1 - Math.max(0, Math.min(1, closing / 900)));
+        run.shake = Math.max(run.shake, tremor);
       }
       // Smash-through: everything the ball crossed since the last frame.
       if (pose.x < marker.lastX) {
@@ -2545,8 +2605,11 @@ export class SnowGameEngine {
     const rider = isMenu
       ? { x: menuX, y: this.attractSurface(menuX) - 5, rotation: this.terrainAngle(menuX), grounded: true }
       : run.rider;
+    // Phase 14 — the impact shake rides the cinematic time scale: locked
+    // through the hit-stop, a slow swell through the slow-motion, then the
+    // rattle decays normally once time recovers.
     const shakeX = run && (this.status === 'playing' || this.status === 'gameover' || this.status === 'crashed')
-      ? Math.sin(this.clock * 78) * run.shake
+      ? Math.sin(this.clock * 78) * run.shake * (this.status === 'crashed' ? this.crashTimeScale : 1)
       : 0;
     const cameraY = view.cameraY;
 
@@ -3921,6 +3984,59 @@ export class SnowGameEngine {
         context.fill();
       }
       context.globalAlpha = 1;
+    }
+    // Phase 14 — the rolled track: churned, bluer snow with a ground-down
+    // bright ridge, side mounds pushed out of the path, and chunks thrown
+    // clear of the roll. Sampled from the live terrain so it hugs crests
+    // and valley necks exactly, capped to the last 640px of travel.
+    if (pose.released) {
+      const trailLength = Math.min(640, pose.distance);
+      if (trailLength > 26) {
+        const backX = pose.x - trailLength;
+        context.save();
+        context.lineCap = 'round';
+        context.strokeStyle = 'rgba(196,220,236,0.55)';
+        context.lineWidth = 13;
+        context.beginPath();
+        context.moveTo(pose.x - cameraX, groundY + 2);
+        for (let wx = pose.x - 30; wx > backX; wx -= 30) context.lineTo(wx - cameraX, this.terrainAt(wx) + 2);
+        context.stroke();
+        context.strokeStyle = 'rgba(246,251,255,0.7)';
+        context.lineWidth = 4;
+        context.beginPath();
+        context.moveTo(pose.x - cameraX, groundY - 1);
+        for (let wx = pose.x - 30; wx > backX; wx -= 30) context.lineTo(wx - cameraX, this.terrainAt(wx) - 1);
+        context.stroke();
+        context.fillStyle = 'rgba(240,248,255,0.85)';
+        for (let wx = pose.x - 16; wx > backX; wx -= 34) {
+          const jitter = boulderJitter(wx);
+          const y = this.terrainAt(wx);
+          context.beginPath();
+          context.arc(wx - cameraX - 10 - jitter * 5, y - 1.5, 2 + jitter * 2.6, 0, TAU);
+          context.fill();
+          context.beginPath();
+          context.arc(wx - cameraX + 10 + (1 - jitter) * 5, y - 1 + jitter * 2, 1.7 + (1 - jitter) * 2.2, 0, TAU);
+          context.fill();
+        }
+        context.fillStyle = 'rgba(250,253,255,0.8)';
+        for (let wx = pose.x - 34; wx > backX; wx -= 47) {
+          const jitter = boulderJitter(wx * 1.37);
+          context.beginPath();
+          context.ellipse(wx - cameraX + jitter * 26, this.terrainAt(wx) - 2 - jitter * 9, 1.6 + jitter * 1.6, 1.1 + jitter, 0, 0, TAU);
+          context.fill();
+        }
+        context.restore();
+      }
+      // The push wave: snow bulldozed ahead of the contact point, deepest
+      // just in front of the rolling face and feathering out ahead of it.
+      const aheadGround = this.terrainAt(pose.x + radius);
+      context.fillStyle = 'rgba(248,252,255,0.92)';
+      context.beginPath();
+      context.moveTo(ballX + radius * 0.1, groundY + 1);
+      context.quadraticCurveTo(ballX + radius * 0.6, Math.min(groundY, aheadGround) - 7, ballX + radius * 1.08, aheadGround - 0.5);
+      context.lineTo(ballX + radius * 1.08, aheadGround + 2.5);
+      context.closePath();
+      context.fill();
     }
     // Contact shadow — wide and soft for the mass.
     context.fillStyle = 'rgba(30,55,72,0.26)';

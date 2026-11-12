@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { App as CapacitorApp } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import { Haptics, ImpactStyle, NotificationType } from '@capacitor/haptics';
-import { SnowGameEngine, type GameScreen, type GraphicsQuality, type HudSnapshot, type RunResult, type SoundEvent } from './game/engine';
+import { SnowGameEngine, CRASH_CINEMATIC_MS, CRASH_BLUR_LEAD_MS, type GameScreen, type GraphicsQuality, type HudSnapshot, type RunResult, type SoundEvent } from './game/engine';
 import { EVENT_DEFINITIONS, type EventId } from './game/events';
 import { AudioManager, type AudioSettings } from './game/audio';
 import { AdService } from './game/ads';
@@ -228,6 +228,13 @@ export default function App() {
   const [scores, setScores] = useState<ScoreEntry[]>(readScores);
   const [result, setResult] = useState<(RunResult & { newRecord: boolean }) | null>(null);
   const [crashResult, setCrashResult] = useState<RunResult | null>(null);
+  // Phase 14 — crash cinematic: the impact (hit-stop → slow-motion tumble →
+  // settle) plays out before the "Keep going?" card is revealed; the
+  // background blur leads the card by a beat so the freeze reads first.
+  const [crashCinematic, setCrashCinematic] = useState(false);
+  const [crashBlur, setCrashBlur] = useState(false);
+  const crashCardTimer = useRef<number | null>(null);
+  const crashBlurTimer = useRef<number | null>(null);
   const [audioSettings, setAudioSettings] = useState<AudioSettings>(() => ({ ...audio.settings }));
   const [preferences, setPreferences] = useState<PlayerPreferences>(readPreferences);
   const [lifetime, setLifetime] = useState<LifetimeStats>(() => readLifetime(readScores()));
@@ -306,6 +313,14 @@ export default function App() {
         const previous = prevStatus.current;
         prevStatus.current = status;
         setScreen(status);
+        // Phase 14 — any exit from the crashed scene (revive, restart, menu)
+        // cancels the pending cinematic timers and lifts the blur instantly.
+        if (status !== 'crashed') {
+          if (crashCardTimer.current !== null) { window.clearTimeout(crashCardTimer.current); crashCardTimer.current = null; }
+          if (crashBlurTimer.current !== null) { window.clearTimeout(crashBlurTimer.current); crashBlurTimer.current = null; }
+          setCrashCinematic(false);
+          setCrashBlur(false);
+        }
         if (status !== 'playing') setFloatingStat(null);
         if (status === 'playing' && previous === 'paused') audio.resumeGame();
         else if (status === 'playing' && previous === 'crashed') audio.reviveCue();
@@ -353,6 +368,21 @@ export default function App() {
         setCrashResult(runResult);
         setResult(null);
         setAdNotice('');
+        // Phase 14 — let the impact drama finish first: the engine holds the
+        // crash frame, slow-motion resolves the fall and the rider settles
+        // before the revive card smoothly fades in over the blurred scene.
+        setCrashCinematic(true);
+        setCrashBlur(false);
+        if (crashCardTimer.current !== null) window.clearTimeout(crashCardTimer.current);
+        if (crashBlurTimer.current !== null) window.clearTimeout(crashBlurTimer.current);
+        crashBlurTimer.current = window.setTimeout(() => {
+          crashBlurTimer.current = null;
+          setCrashBlur(true);
+        }, Math.max(0, CRASH_CINEMATIC_MS - CRASH_BLUR_LEAD_MS));
+        crashCardTimer.current = window.setTimeout(() => {
+          crashCardTimer.current = null;
+          setCrashCinematic(false);
+        }, CRASH_CINEMATIC_MS);
         audio.crashCue();
         void ads.initialize()
           .then(() => ads.prepareRewarded())
@@ -401,6 +431,8 @@ export default function App() {
     return () => {
       engine.destroy();
       engineRef.current = null;
+      if (crashCardTimer.current !== null) window.clearTimeout(crashCardTimer.current);
+      if (crashBlurTimer.current !== null) window.clearTimeout(crashBlurTimer.current);
     };
   }, [audio, ads]);
 
@@ -1041,7 +1073,7 @@ export default function App() {
 
   return (
     <main className={`game-app screen-${screen}${IS_ANDROID ? ' android-app' : ''}`}>
-      <canvas ref={canvasRef} className="game-canvas" aria-label="Afterglow endless snowboarding game" />
+      <canvas ref={canvasRef} className={`game-canvas${crashBlur ? ' impact-blur' : ''}`} aria-label="Afterglow endless snowboarding game" />
       <div className="scene-vignette" aria-hidden="true" />
 
       {DEV_MODE && (
@@ -1511,7 +1543,7 @@ export default function App() {
         </div>
       )}
 
-      {screen === 'crashed' && crashResult && (
+      {screen === 'crashed' && crashResult && !crashCinematic && (
         <section className="state-overlay crash-overlay" aria-labelledby="crash-title">
           <div className="state-content crash-content">
             <div className="eyebrow"><span className="eyebrow-dot" />THE MOUNTAIN PAUSES</div>
