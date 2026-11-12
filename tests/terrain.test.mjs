@@ -33,16 +33,25 @@ test('Every theme has continuous chunk heights, tangents and curvature with boun
   const epsilon = 0.01;
   for (const level of [1, 2, 3, 4, 30, 1000]) {
     const terrain = new TerrainGenerator(generateLevel(level, 771));
+    // Phase 15 — levels ≥ 5 interpolate with the flow spline, which carries a
+    // non-zero tangent across chunk boundaries (that is the point: chained
+    // chunks form one continuous mountainside). The ±ε height residual is
+    // therefore bounded by 2ε·TERRAIN_MAX_SLOPE ≈ 0.007, and the centred
+    // seam differences measure ε·h'' / ε·h''' (real curvature carried across
+    // the boundary) rather than defects. Both tolerances stay far below
+    // anything a genuine seam break would produce.
+    const jumpTolerance = level >= 5 ? 0.02 : 0.00001;
+    const seamTolerance = level >= 5 ? 0.0002 : 0.00001;
     for (let index = 1; index < 250; index++) {
       const x = index * WIDTH;
       const left = terrain.heightAt(x - epsilon);
       const middle = terrain.heightAt(x);
       const right = terrain.heightAt(x + epsilon);
-      assert.ok(Math.abs(left - right) < 0.00001);
-      assert.ok(Math.abs((middle - left) / epsilon - (right - middle) / epsilon) < 0.00001);
+      assert.ok(Math.abs(left - right) < jumpTolerance, `height step at ${x}`);
+      assert.ok(Math.abs((middle - left) / epsilon - (right - middle) / epsilon) < seamTolerance, `tangent seam at ${x}`);
       const leftCurvature = (middle - 2 * left + terrain.heightAt(x - 2 * epsilon)) / epsilon ** 2;
       const rightCurvature = (terrain.heightAt(x + 2 * epsilon) - 2 * right + middle) / epsilon ** 2;
-      assert.ok(Math.abs(leftCurvature - rightCurvature) < 0.00001);
+      assert.ok(Math.abs(leftCurvature - rightCurvature) < seamTolerance, `curvature seam at ${x}`);
       for (let sample = x; sample < x + WIDTH; sample += 8) {
         const slope = (terrain.heightAt(sample + 0.1) - terrain.heightAt(sample - 0.1)) / 0.2;
         assert.ok(Math.abs(slope) <= TERRAIN_MAX_SLOPE + 0.00001, `unsafe slope ${slope}`);

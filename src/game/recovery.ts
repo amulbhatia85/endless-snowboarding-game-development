@@ -23,6 +23,16 @@ export const RECOVERY_CONFIG = {
   /** Exponential decay rates for slide, spin and camera catch-up. */
   crashTumbleSlideDecay: 3.4,
   crashTumbleSpinDecay: 2.4,
+  /** Phase 14 — crash-cinematic timing. The tumble no longer plays at full
+   *  speed behind an instant popup: a hit-stop holds the impact frame, a
+   *  slow-motion window stretches the fall, and the settle hold is the frozen
+   *  beat (with the background blur fading in) before the revive card is
+   *  revealed. All three are real-time windows; the tumble itself integrates
+   *  scaled time. */
+  crashHitStopSeconds: 0.2,
+  crashSlowMoSeconds: 0.7,
+  crashSlowMoScale: 0.38,
+  crashSettleHoldSeconds: 0.38,
   /** How much of the revive camera correction is applied instantly; the
    * regular smoothed follow completes the rest (no snap, no jump). */
   reviveCameraCatchUp: 0.6,

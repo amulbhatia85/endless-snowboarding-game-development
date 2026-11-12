@@ -200,10 +200,11 @@ test('unlock builds the graph exactly once (no duplicate engines)', () => {
   const ctx = MockAudioContext.instances[0];
   assert.equal(ctx.state, 'running');
   assert.equal(clock.intervals.length, 1, 'one music scheduler interval');
-  // Six ambience loops (glide, wind, storm, nightAir, leaves, crackle) + the
-  // tension drone's two saws and tremolo lfo.
+  // Seven ambience loops (glide, wind, storm, nightAir, leaves, crackle and
+  // the Phase 13 ice-boulder rumble) + the tension drone's two saws and
+  // tremolo lfo.
   const sources = ctx.nodes.filter((n) => n.kind === 'source' && n.loop);
-  assert.equal(sources.length, 6, 'six looping noise sources');
+  assert.equal(sources.length, 7, 'seven looping noise sources');
   const oscs = ctx.nodes.filter((n) => n.kind === 'osc');
   assert.ok(oscs.length >= 3, 'tension drone oscillators exist');
   const tensionSaws = oscs.filter((o) => o.type === 'sawtooth' && o.frequency.value < 100);
@@ -594,7 +595,7 @@ function makeGame(save, sounds) {
   return { game, fast: fastContext() };
 }
 
-const HAZ = ['rock', 'log', 'tree', 'gap', 'ramp', 'swinging-log', 'root', 'fence', 'ice', 'icicle', 'snowball', 'branch'];
+const HAZ = ['rock', 'log', 'tree', 'gap', 'ramp', 'swinging-log', 'root', 'fence', 'ice', 'icicle', 'snowball', 'branch', 'ice-boulder'];
 
 function controllerJump(game) {
   const run = game.run;

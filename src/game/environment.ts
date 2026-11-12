@@ -457,10 +457,12 @@ const SNOWY: EnvironmentDefinition = {
     },
   ],
   layers: [
-    { parallax: 0.05, baseY: 0.4, amplitude: 0.2, roughness: 0.9, snowcap: 0.85, treeline: 0, color: '#c6d7e6' },
-    { parallax: 0.12, baseY: 0.54, amplitude: 0.13, roughness: 0.6, snowcap: 0.6, treeline: 0.05, color: '#d6e3ef' },
-    { parallax: 0.24, baseY: 0.66, amplitude: 0.085, roughness: 0.35, snowcap: 0.35, treeline: 0.25, color: '#e3edf5' },
-    { parallax: 0.38, baseY: 0.75, amplitude: 0.055, roughness: 0.2, snowcap: 0.15, treeline: 0.4, color: '#eef4fa' },
+    // Phase 13 — the far ranges climb higher and read more jagged so the
+    // alpine background carries the new gorges and elevated peaks.
+    { parallax: 0.05, baseY: 0.37, amplitude: 0.27, roughness: 0.95, snowcap: 0.9, treeline: 0, color: '#c6d7e6' },
+    { parallax: 0.12, baseY: 0.52, amplitude: 0.17, roughness: 0.68, snowcap: 0.65, treeline: 0.05, color: '#d6e3ef' },
+    { parallax: 0.24, baseY: 0.66, amplitude: 0.095, roughness: 0.4, snowcap: 0.38, treeline: 0.22, color: '#e3edf5' },
+    { parallax: 0.38, baseY: 0.75, amplitude: 0.06, roughness: 0.24, snowcap: 0.18, treeline: 0.38, color: '#eef4fa' },
   ],
   fogColor: '#eef4f8',
   fogVeil: [0.1, 0.05, 0.03, 0.02],
@@ -1283,12 +1285,19 @@ export class EnvironmentManager {
     layerIndex: number,
     palette: Palette,
   ): void {
-    const { width, height, cameraX } = view;
+    const { width, height, cameraX, cameraY } = view;
     const step = 150;
     const offset = cameraX * layer.parallax;
     const first = Math.floor(offset / step) - 1;
     const last = Math.ceil((offset + width) / step) + 1;
-    const baseY = height * layer.baseY;
+    // Phase 15 — vertical parallax: distant ridges follow the camera's
+    // vertical swing far less than the near terrain does, so descending into
+    // a deep valley stacks the ranges overhead (real mountain-layering depth)
+    // while climbs release them again. The fill bottom extends past the
+    // shifted canvas so no gap can open under the layers.
+    const depthFactor = 0.35 + layer.parallax * 1.3;
+    const baseY = height * layer.baseY - cameraY * (1 - depthFactor);
+    const fillBottom = height + 20 - Math.min(0, cameraY);
     const amplitude = height * layer.amplitude;
     const seed = 4 + layerIndex * 15;
 
@@ -1301,7 +1310,7 @@ export class EnvironmentManager {
     fill = mixColor(fill, this.resolvedColors.fog, this.resolvedVeil[layerIndex] * this.weather.fog);
 
     context.beginPath();
-    context.moveTo(first * step - offset, height + 20);
+    context.moveTo(first * step - offset, fillBottom);
     for (let index = first; index <= last; index += 1) {
       const ridge = 0.2 + hash(index * 3.71 + seed) * 0.8;
       const shoulder = 0.25 + hash(index * 8.11 + seed + 7) * 0.5;
@@ -1313,7 +1322,7 @@ export class EnvironmentManager {
       context.lineTo(centerX, peakY);
       context.lineTo(centerX + step * (1 - shoulder), rightY);
     }
-    context.lineTo((last + 1) * step - offset, height + 20);
+    context.lineTo((last + 1) * step - offset, fillBottom);
     context.closePath();
     context.fillStyle = fill;
     context.fill();

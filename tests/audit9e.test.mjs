@@ -18,7 +18,7 @@ const { SnowGameEngine } = await import(moduleUrl('src/game/engine.ts'));
 
 const THEMES = ['countryside', 'snowy-mountains', 'misty-mountains', 'moonlit-forest'];
 const SEEDS = [7, 4242, 999999];
-const HAZARD_KINDS = ['rock', 'log', 'tree', 'gap', 'ramp', 'swinging-log', 'root', 'fence', 'ice', 'icicle', 'snowball', 'branch'];
+const HAZARD_KINDS = ['rock', 'log', 'tree', 'gap', 'ramp', 'swinging-log', 'root', 'fence', 'ice', 'icicle', 'snowball', 'branch', 'ice-boulder'];
 const LEVEL_LENGTH_PX = 40000; // ≈ the 50k-point target distance
 
 // ───────────────────────── harness ─────────────────────────
@@ -282,7 +282,11 @@ test('Terrain chunk patterns stay varied with bounded repetition runs', () => {
         let runLength = 0;
         // Sample at chunk resolution (640px) so each chunk counts once.
         for (let x = 0; x < 30000; x += 640) {
-          const { pattern } = terrain.describe(x);
+          // Phase 15 — deep mountain runs deliberately chain 5+ same-pattern
+          // chunks (that is the mountainside); the audit polices the classic
+          // variety machinery, so run chunks are skipped.
+          const { pattern, inRun } = terrain.describe(x);
+          if (inRun) { runLength = 0; previous = ''; continue; }
           patternCounts[pattern] = (patternCounts[pattern] ?? 0) + 1;
           runLength = pattern === previous ? runLength + 1 : 1;
           previous = pattern;

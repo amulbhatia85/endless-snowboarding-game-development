@@ -4,7 +4,7 @@ import { BICYCLE_PHYSICS } from './riderPhysics';
 import type { DifficultyDirective } from './difficulty';
 import {
   validateGap, validateRamp, validateBridge, validateObstacle, validateRampGap, validateSwingingLog,
-  validateIcePatch, validateFallingHazard, validateSnowball,
+  validateIcePatch, validateFallingHazard, validateSnowball, validateGorge, validateIceBoulder,
   type LandingValidation, type TraversalOptions,
 } from './terrain';
 
@@ -20,7 +20,7 @@ export interface PlacementMetadata {
 }
 export interface PlannedObstacle {
   kind: 'rock' | 'log' | 'tree' | 'gap' | 'ramp' | 'swinging-log'
-    | 'root' | 'fence' | 'ice' | 'icicle' | 'snowball' | 'branch';
+    | 'root' | 'fence' | 'ice' | 'icicle' | 'snowball' | 'branch' | 'ice-boulder';
   x: number;
   width?: number;
   bridged?: boolean;
@@ -88,6 +88,15 @@ export const OBSTACLE_PATTERNS: readonly Pattern[] = [
   { id: 'falling-branch', minLevel: 7, envMinLevel: { 'moonlit-forest': 5, jungle: 5 }, weight: 8, requires: ['branch'], sequence: ['branch'], rating: 0.78 },
   // Moving hazards require a complete renderer, collider, warning and validated envelope.
   { id: 'warned-swinging-log', minLevel: 8, envMinLevel: { 'moonlit-forest': 6, jungle: 4 }, weight: 10, requires: ['swinging-log'], sequence: ['swinging-log'], rating: 0.85 },
+  // Phase 13 — deep valleys and giant rolling ice boulders. The gorge is the
+  // widest fatal gap, placed only where the terrain forms a true valley neck
+  // (far side rising into the next mountain section); the boulder is a
+  // gravity-driven head-on hazard on rider-uphill ground. The arrivals are
+  // staggered one level apart so no level introduces five families at once:
+  // the boulder pairs with the snowball at the first mountain level past 5,
+  // the gorge joins the cliff/bridge class a level later.
+  { id: 'gorge-crossing', minLevel: 8, envMinLevel: { 'snowy-mountains': 7, 'misty-mountains': 7 }, weight: 6, requires: ['gorge'], sequence: ['gorge'], rating: 0.86 },
+  { id: 'boulder-run', minLevel: 6, envMinLevel: { 'snowy-mountains': 5 }, weight: 7, requires: ['ice-boulder'], sequence: ['ice-boulder'], rating: 0.72 },
 ];
 
 /** Challenge rating of a pattern id (undefined for 'recovery'/unknown). */
@@ -98,7 +107,7 @@ export function patternRating(id: string): number | undefined {
 /** Obstacle ids whose patterns demand a clean takeoff corridor or sweep/telegraph a hazard. */
 const DANGEROUS_REQUIRES: ReadonlySet<string> = new Set([
   'gap', 'ramp', 'swinging-log', 'cliff', 'broken-bridge', 'moving-platform',
-  'snowball', 'icicle', 'branch',
+  'snowball', 'icicle', 'branch', 'gorge', 'ice-boulder',
 ]);
 
 /**
@@ -441,6 +450,55 @@ export class ObstaclePlanner {
       } else if (id === 'snowball') {
         validation = validateSnowball(surface, x, options);
         kind = id;
+      } else if (id === 'gorge') {
+        // A gorge only exists where the terrain forms a valley neck, so the
+        // pattern scans forward within the chunk-scale window for a spot
+        // whose far side rises into the next mountain section. Validation,
+        // conflicts and spacing are otherwise exactly the gap pipeline's.
+        width = 96 + random() * 36;
+        let attempt: LandingValidation | undefined;
+        let reason = 'No valley neck within the scan window';
+        for (const offset of [0, 130, 260, 390, 520]) {
+          const neckX = x + offset;
+          const check = validateGorge(surface, neckX, width, options);
+          if (check.safe) { attempt = check; x = neckX; break; }
+          reason = check.reason ?? reason;
+        }
+        if (!attempt) return `Gorge rejected: ${reason}`;
+        validation = attempt;
+        kind = 'gap';
+      } else if (id === 'ice-boulder') {
+        // The ledge must fall away toward the rider, so the pattern scans
+        // forward for a spawn slope the moment gravity can own — and the
+        // boulder's backward roll corridor may not cross a chasm the ball
+        // would float over, nor overlap another rolling hazard's patrol.
+        let attempt: LandingValidation | undefined;
+        let reason = 'No rider-uphill ledge within the scan window';
+        for (const offset of [0, 160, 320, 480, 640, 800]) {
+          const ledgeX = x + offset;
+          let blocked = false;
+          for (const nearby of context.nearby) {
+            const bridged = nearby.plan?.obstacleId === 'bridge' || nearby.plan?.obstacleId === 'moving-platform';
+            if (nearby.kind === 'gap' && !bridged
+              && nearby.x + (nearby.width ?? 40) > ledgeX - 1400 && nearby.x < ledgeX + 60) {
+              blocked = true;
+              reason = 'Boulder roll corridor crosses a chasm';
+              break;
+            }
+            if (nearby.kind === 'snowball' && nearby.x > ledgeX - 1450 && nearby.x < ledgeX + 60) {
+              blocked = true;
+              reason = 'Boulder roll corridor overlaps a snowball patrol';
+              break;
+            }
+          }
+          if (blocked) continue;
+          const check = validateIceBoulder(surface, ledgeX, options);
+          if (check.safe) { attempt = check; x = ledgeX; break; }
+          reason = check.reason ?? reason;
+        }
+        if (!attempt) return `Ice boulder rejected: ${reason}`;
+        validation = attempt;
+        kind = id;
       } else if (id === 'gap') {
         width = 82 + random() * 36;
         validation = validateGap(surface, x, width, options);
@@ -473,6 +531,11 @@ export class ObstaclePlanner {
 
       if (!validation.safe) return validation.reason ?? 'Trajectory rejected';
       const metadata = this.metadata(pattern.id, id, validation, x, context, reactionDistance);
+      // Phase 13 — a head-on hazard closes at rider + boulder speed, so its
+      // warning must lead by the combined closing distance (~2.3 s at 475 +
+      // 350 px/s), not the rider's own approach. The metadata floor below
+      // only grows, so the audited reaction window is never reduced.
+      if (id === 'ice-boulder') metadata.warningStart -= 1090;
       const rejection = this.conflict(metadata, x, x + (width ?? 40), context, clearUntil, reactionDistance);
       if (rejection) return rejection;
       if (obstacles.length) {
@@ -481,7 +544,7 @@ export class ObstaclePlanner {
       }
       obstacles.push({
         kind, x, width, bridged, plan: metadata, variant: random(),
-        phase: id === 'swinging-log' || id === 'icicle' || id === 'snowball' || id === 'branch' || id === 'moving-platform'
+        phase: id === 'swinging-log' || id === 'icicle' || id === 'snowball' || id === 'branch' || id === 'moving-platform' || id === 'ice-boulder'
           ? random() * Math.PI * 2
           : undefined,
       });
@@ -517,7 +580,7 @@ export class ObstaclePlanner {
     const footprint = { start: Math.min(x - 40, plan.takeoff.start), end: Math.max(end, plan.clearUntil) };
     if (context.reserved.some(region => overlap(footprint, region))) return 'Pattern overlaps a protected start/house area';
     for (const nearby of context.nearby) {
-      if (!['rock', 'tree', 'log', 'gap', 'ramp', 'swinging-log', 'root', 'fence', 'ice', 'icicle', 'snowball', 'branch'].includes(nearby.kind)) continue;
+      if (!['rock', 'tree', 'log', 'gap', 'ramp', 'swinging-log', 'root', 'fence', 'ice', 'icicle', 'snowball', 'branch', 'ice-boulder'].includes(nearby.kind)) continue;
       const occupied = { start: nearby.plan?.takeoff.start ?? nearby.x - 120, end: nearby.plan?.clearUntil ?? nearby.x + (nearby.width ?? 40) + 150 };
       if (overlap(footprint, occupied)) return 'Nearby obstacle conflicts with this traversal corridor';
     }

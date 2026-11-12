@@ -29,6 +29,12 @@ export interface TerrainBias {
   recoveryScale: number;
   /** Shifts the valley ↔ rolling ↔ ramp split (−0.12..0.12). */
   valleyBias: number;
+  /**
+   * Phase 15 — deep mountain runs (0..1): how strongly the level favours
+   * long, flowing descents into genuinely deep valleys and the climbs back
+   * out. 0 (classic prefix) never generates a run.
+   */
+  descentScale: number;
 }
 
 export interface LevelProfile {
@@ -38,17 +44,17 @@ export interface LevelProfile {
   terrain: TerrainBias;
 }
 
-const NEUTRAL_BIAS: TerrainBias = { rangeScale: 1, bumpScale: 1, recoveryScale: 1, valleyBias: 0 };
+const NEUTRAL_BIAS: TerrainBias = { rangeScale: 1, bumpScale: 1, recoveryScale: 1, valleyBias: 0, descentScale: 0 };
 
 /** The seven generated identities (levels ≥ 5). `classic` is the neutral prefix profile. */
 const PROFILE_BIASES: Record<Exclude<LevelProfileId, 'classic'>, TerrainBias> = {
-  'flowing-hills': { rangeScale: 0.9, bumpScale: 0.85, recoveryScale: 1.25, valleyBias: 0.04 },
-  'mountain-descent': { rangeScale: 1.25, bumpScale: 0.7, recoveryScale: 0.8, valleyBias: -0.06 },
-  'gradual-climb': { rangeScale: 0.95, bumpScale: 0.6, recoveryScale: 1.3, valleyBias: 0.06 },
-  'rolling-valleys': { rangeScale: 1.05, bumpScale: 1.1, recoveryScale: 0.95, valleyBias: 0.12 },
-  'technical-slopes': { rangeScale: 1.1, bumpScale: 1.3, recoveryScale: 0.6, valleyBias: -0.1 },
-  'controlled-flats': { rangeScale: 0.55, bumpScale: 0.35, recoveryScale: 1.45, valleyBias: 0.02 },
-  'mixed-terrain': { rangeScale: 1, bumpScale: 1, recoveryScale: 1, valleyBias: 0 },
+  'flowing-hills': { rangeScale: 0.9, bumpScale: 0.85, recoveryScale: 1.25, valleyBias: 0.04, descentScale: 0.15 },
+  'mountain-descent': { rangeScale: 1.55, bumpScale: 0.55, recoveryScale: 0.55, valleyBias: 0.12, descentScale: 0.95 },
+  'gradual-climb': { rangeScale: 0.95, bumpScale: 0.6, recoveryScale: 1.3, valleyBias: 0.06, descentScale: 0.25 },
+  'rolling-valleys': { rangeScale: 1.05, bumpScale: 1.1, recoveryScale: 0.95, valleyBias: 0.12, descentScale: 0.5 },
+  'technical-slopes': { rangeScale: 1.1, bumpScale: 1.3, recoveryScale: 0.6, valleyBias: -0.1, descentScale: 0.45 },
+  'controlled-flats': { rangeScale: 0.55, bumpScale: 0.35, recoveryScale: 1.45, valleyBias: 0.02, descentScale: 0 },
+  'mixed-terrain': { rangeScale: 1, bumpScale: 1, recoveryScale: 1, valleyBias: 0, descentScale: 0.35 },
 };
 
 const PROFILE_LABELS: Record<LevelProfileId, string> = {
@@ -123,8 +129,8 @@ export interface LevelConfiguration {
 const THEMES: readonly EnvironmentTheme[] = ['countryside', 'snowy-mountains', 'misty-mountains', 'moonlit-forest', 'jungle'];
 const THEME_CONFIG = {
   countryside: { name: 'Green Hills', obstacles: ['rock', 'log', 'tree', 'root', 'fence', 'ramp', 'gap', 'bridge'], weather: 'clear', intensity: 0, speed: 1 },
-  'snowy-mountains': { name: 'Snowfall Adventure', obstacles: ['rock', 'log', 'ice', 'icicle', 'snowball', 'gap', 'ramp', 'bridge'], weather: 'snow', intensity: 0.5, speed: 0.38 },
-  'misty-mountains': { name: 'Misty Mountains', obstacles: ['rock', 'gap', 'cliff', 'bridge', 'broken-bridge', 'ramp', 'log', 'moving-platform'], weather: 'mist', intensity: 0.4, speed: 0.4 },
+  'snowy-mountains': { name: 'Snowfall Adventure', obstacles: ['rock', 'log', 'ice', 'icicle', 'snowball', 'gap', 'ramp', 'bridge', 'gorge', 'ice-boulder'], weather: 'snow', intensity: 0.5, speed: 0.38 },
+  'misty-mountains': { name: 'Misty Mountains', obstacles: ['rock', 'gap', 'cliff', 'bridge', 'broken-bridge', 'ramp', 'log', 'moving-platform', 'gorge'], weather: 'mist', intensity: 0.4, speed: 0.4 },
   'moonlit-forest': { name: 'Moonlit Forest', obstacles: ['tree', 'rock', 'root', 'branch', 'log', 'swinging-log', 'gap'], weather: 'night', intensity: 0.35, speed: 0.5 },
   // Phase 11 — the fifth environment: a dense canopy world of vines, ruin
   // stones and river crossings. Owns the timed-hazard families early

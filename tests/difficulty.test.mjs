@@ -5,7 +5,7 @@ import { moduleUrl } from './loadTypeScript.mjs';
 
 const { generateLevel, LEVEL_SAVE_KEY } = await import(moduleUrl('src/game/levelManager.ts'));
 const { OBSTACLE_PATTERNS, ObstaclePlanner, patternIsDangerous, patternRating, validPlacementMetadata } = await import(moduleUrl('src/game/obstaclePlanner.ts'));
-const { TerrainGenerator, validateGap, validateRamp, validateObstacle, validateSwingingLog, validateRampGap, validateIcePatch, validateSnowball, validateFallingHazard, BICYCLE_PHYSICS } = await import(moduleUrl('src/game/terrain.ts'));
+const { TerrainGenerator, validateGap, validateRamp, validateObstacle, validateSwingingLog, validateRampGap, validateIcePatch, validateSnowball, validateGorge, validateIceBoulder, validateFallingHazard, BICYCLE_PHYSICS } = await import(moduleUrl('src/game/terrain.ts'));
 const { DifficultyManager, DEFAULT_DIFFICULTY_CONFIG } = await import(moduleUrl('src/game/difficulty.ts'));
 const { SnowGameEngine } = await import(moduleUrl('src/game/engine.ts'));
 
@@ -304,11 +304,13 @@ test('Paced sequences stay physically achievable across levels, seeds and zones'
           assert.equal(validateRampGap(surface, ramp.x, gap.x, gap.width, options).safe, true);
         } else for (const obstacle of plan.obstacles) {
           if (obstacle.bridged) continue;
-          const validation = obstacle.kind === 'gap' ? validateGap(surface, obstacle.x, obstacle.width, options)
+          const validation = (obstacle.kind === 'gap' && obstacle.plan?.obstacleId === 'gorge') ? validateGorge(surface, obstacle.x, obstacle.width, options)
+            : obstacle.kind === 'gap' ? validateGap(surface, obstacle.x, obstacle.width, options)
             : obstacle.kind === 'ramp' ? validateRamp(surface, obstacle.x, options)
             : obstacle.kind === 'swinging-log' ? validateSwingingLog(surface, obstacle.x, options)
             : obstacle.kind === 'ice' ? validateIcePatch(surface, obstacle.x, obstacle.width)
             : obstacle.kind === 'snowball' ? validateSnowball(surface, obstacle.x, options)
+            : obstacle.kind === 'ice-boulder' ? validateIceBoulder(surface, obstacle.x, options)
             : (obstacle.kind === 'icicle' || obstacle.kind === 'branch') ? validateFallingHazard(surface, obstacle.x)
             : validateObstacle(surface, obstacle.x, obstacle.kind, options);
           assert.equal(validation.safe, true, `${plan.patternId} L${level} p${progress}`);

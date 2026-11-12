@@ -314,7 +314,7 @@ test('auto-quality 10D: pacing signal flows through frame() itself', () => {
   const run = game.run;
   assert.ok(run, 'run exists');
   // Invulnerable + gap-jumping ride so a 40ms-sim-step run survives long enough.
-  const HAZ = ['rock', 'log', 'tree', 'gap', 'ramp', 'swinging-log', 'root', 'fence', 'ice', 'icicle', 'snowball', 'branch'];
+  const HAZ = ['rock', 'log', 'tree', 'gap', 'ramp', 'swinging-log', 'root', 'fence', 'ice', 'icicle', 'snowball', 'branch', 'ice-boulder'];
   run.invulnerableUntil = run.elapsed + 9999;
   run.rider.speed = 475;
   let degradedAt = -1;
