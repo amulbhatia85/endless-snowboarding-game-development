@@ -6,24 +6,59 @@ import {
   RewardAdPluginEvents,
 } from '@capacitor-community/admob';
 
+export type AdPlatform = 'android' | 'ios';
+
+interface AdUnitIds {
+  readonly appId: string;
+  readonly interstitialId: string;
+  readonly rewardedId: string;
+}
+
+/**
+ * Google's ad units are platform-specific: an Android unit will not serve on
+ * iOS and vice versa. Anything that is not explicitly iOS — including the web
+ * preview, where ads are never requested — resolves to Android, the platform
+ * the app ships on first.
+ */
+export function resolveAdPlatform(platform?: string | null): AdPlatform {
+  return platform === 'ios' ? 'ios' : 'android';
+}
+
 /**
  * Central AdMob configuration.
  *
- * Development intentionally uses Google's official test IDs. Before a store
+ * Development intentionally uses Google's official per-platform test IDs, so
+ * test mode stays enabled for device and TestFlight testing. Before a store
  * release, set testMode to false and replace every production placeholder in
- * this one file (plus the AndroidManifest application ID noted below).
+ * this one file, plus the native application IDs: the AndroidManifest
+ * `com.google.android.gms.ads.APPLICATION_ID` meta-data and the iOS
+ * Info.plist `GADApplicationIdentifier`.
  */
 export const ADMOB_CONFIG = {
   testMode: true,
   test: {
-    appId: 'ca-app-pub-3940256099942544~3347511713',
-    interstitialId: 'ca-app-pub-3940256099942544/1033173712',
-    rewardedId: 'ca-app-pub-3940256099942544/5224354917',
+    android: {
+      appId: 'ca-app-pub-3940256099942544~3347511713',
+      interstitialId: 'ca-app-pub-3940256099942544/1033173712',
+      rewardedId: 'ca-app-pub-3940256099942544/5224354917',
+    },
+    ios: {
+      appId: 'ca-app-pub-3940256099942544~1458002511',
+      interstitialId: 'ca-app-pub-3940256099942544/4411468910',
+      rewardedId: 'ca-app-pub-3940256099942544/1712485313',
+    },
   },
   production: {
-    appId: 'YOUR_PRODUCTION_APP_ID',
-    interstitialId: 'YOUR_PRODUCTION_INTERSTITIAL_ID',
-    rewardedId: 'YOUR_PRODUCTION_REWARDED_ID',
+    android: {
+      appId: 'YOUR_PRODUCTION_APP_ID',
+      interstitialId: 'YOUR_PRODUCTION_INTERSTITIAL_ID',
+      rewardedId: 'YOUR_PRODUCTION_REWARDED_ID',
+    },
+    ios: {
+      appId: 'YOUR_PRODUCTION_APP_ID_IOS',
+      interstitialId: 'YOUR_PRODUCTION_INTERSTITIAL_ID_IOS',
+      rewardedId: 'YOUR_PRODUCTION_REWARDED_ID_IOS',
+    },
   },
   interstitialEveryRuns: 3,
   minimumFullScreenIntervalMs: 90_000,
@@ -81,8 +116,13 @@ export class AdService {
     return Capacitor.isNativePlatform();
   }
 
-  get activeIds() {
-    return ADMOB_CONFIG.testMode ? ADMOB_CONFIG.test : ADMOB_CONFIG.production;
+  get platform(): AdPlatform {
+    return resolveAdPlatform(Capacitor.getPlatform());
+  }
+
+  get activeIds(): AdUnitIds {
+    const ids = ADMOB_CONFIG.testMode ? ADMOB_CONFIG.test : ADMOB_CONFIG.production;
+    return ids[this.platform];
   }
 
   get rewardedAvailable(): boolean {
