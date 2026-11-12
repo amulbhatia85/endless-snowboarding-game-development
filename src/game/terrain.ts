@@ -15,6 +15,15 @@ export interface TerrainChunk {
 }
 export interface TerrainOrigin { level: number; x: number; offset: number }
 
+/** Phase 15 — deep mountain runs: the longest a run can span (chunks), and the
+ *  minimum spacing between run starts. The gap exceeds the max length so two
+ *  runs can never overlap or abut. */
+const RUN_MAX_LENGTH = 14;
+const RUN_MIN_GAP = 16;
+/** Phase 15 — tangents for the flow spline are clamped so a chunk's curve can
+ *  never approach the slope cap from the tangent terms alone. */
+const FLOW_TANGENT_LIMIT = 0.27;
+
 const PROFILES: Record<EnvironmentTheme, { range: number; bump: number; recovery: number }> = {
   countryside: { range: 28, bump: 25, recovery: 0.23 },
   'snowy-mountains': { range: 38, bump: 32, recovery: 0.2 },
@@ -23,7 +32,7 @@ const PROFILES: Record<EnvironmentTheme, { range: number; bump: number; recovery
   jungle: { range: 30, bump: 26, recovery: 0.24 },
 };
 /** Phase 9C — the neutral bias keeps levels 1–4 byte-identical to Phase 8. */
-const NEUTRAL_TERRAIN_BIAS: TerrainBias = { rangeScale: 1, bumpScale: 1, recoveryScale: 1, valleyBias: 0 };
+const NEUTRAL_TERRAIN_BIAS: TerrainBias = { rangeScale: 1, bumpScale: 1, recoveryScale: 1, valleyBias: 0, descentScale: 0 };
 const clamp = (n: number, low: number, high: number) => Math.max(low, Math.min(high, n));
 const smooth = (t: number) => t * t * t * (t * (t * 6 - 15) + 10);
 
@@ -31,12 +40,29 @@ export class TerrainGenerator {
   private readonly chunks = new Map<number, TerrainChunk>();
   /** Phase 13 — memoised clamped anchors (see anchor()). */
   private readonly anchors = new Map<number, number>();
+  /** Phase 15 — deep mountain runs: run-start decisions (computed in order)
+   *  and the shaped boundary heights of each started run. */
+  private readonly runStartMemo = new Map<number, boolean>();
+  private readonly runAnchors = new Map<number, number[]>();
+  private readonly runLengths = new Map<number, number>();
+  /** Phase 15 — crest lips per run start: short convex overlays at the entry
+   *  and exit crests whose curvature unweights a fast rider into a natural
+   *  launch (v²·κ > 0.85·g). */
+  private readonly runLips = new Map<number, { xc: number; w: number; a: number }[]>();
+  private readonly lipScratch = [-1, -1, -1];
+  private runStartComputed = 5;
   generatedChunks = 0;
   /** Phase 9C — per-level statistical bias (neutral for levels 1–4). */
   private readonly bias: TerrainBias;
+  /** Phase 15 — levels ≥ 5 interpolate anchors with a slope-flowing quintic
+   *  Hermite spline (tangents from neighbouring anchors) instead of the
+   *  zero-tangent smoothstep, so chained chunks form one continuous mountainside
+   *  rather than a scalloped staircase. Levels 1–4 keep the classic curve. */
+  private readonly flow: boolean;
 
   constructor(readonly configuration: LevelConfiguration) {
     this.bias = configuration.profile?.terrain ?? NEUTRAL_TERRAIN_BIAS;
+    this.flow = configuration.number >= 5;
   }
 
   get cachedChunks(): number { return this.chunks.size; }
@@ -45,7 +71,8 @@ export class TerrainGenerator {
     return createLevelRandom(this.configuration.terrain.variationSeed ^ Math.imul(index, 0x9e3779b9) ^ salt)();
   }
 
-  private recovery(index: number): boolean {
+  /** The statistical recovery decision, untouched by run suppression. */
+  private recoveryRaw(index: number): boolean {
     if (index <= 0) return true;
     const base = PROFILES[this.configuration.environment].recovery * this.bias.recoveryScale;
     if (this.random(index, 0x43f12) >= clamp(base, 0.08, 0.42)) return false;
@@ -53,9 +80,250 @@ export class TerrainGenerator {
     // silhouette keeps breathing. Recovery probability itself is untouched;
     // only statistically excessive streaks are trimmed.
     for (let back = 1; back <= 5; back += 1) {
-      if (!this.recovery(index - back)) return true;
+      if (!this.recoveryRaw(index - back)) return true;
     }
     return false;
+  }
+
+  /**
+   * Phase 15 — recovery is suppressed through a mountain run and two chunks
+   * past its exit, so the anchor chain is free to carry the deep valley and
+   * climb back into the normal band before any flat reset can snap against a
+   * still-deep anchor (a snap mid-run would be a cliff, not a valley).
+   */
+  private recovery(index: number): boolean {
+    if (this.inRunZone(index)) return false;
+    return this.recoveryRaw(index);
+  }
+
+  /** True when `index` sits inside a run's chunks or its two-chunk exit pad. */
+  private inRunZone(index: number): boolean {
+    if (this.bias.descentScale <= 0) return false;
+    return this.runStartCoveringChunk(index) >= 0
+      || this.runStartCoveringChunk(index - 1) >= 0
+      || this.runStartCoveringChunk(index - 2) >= 0;
+  }
+
+  /** Phase 15 — deterministic run-start decisions, computed strictly in
+   *  ascending index order so every query sees the same history. */
+  private runStart(index: number): boolean {
+    if (index < 6 || this.bias.descentScale <= 0) return false;
+    if (!this.runStartMemo.has(index)) {
+      for (let i = Math.max(6, this.runStartComputed + 1); i <= index; i += 1) {
+        let start = false;
+        if (this.bias.descentScale > 0) {
+          let spaced = true;
+          for (let back = 1; back <= RUN_MIN_GAP; back += 1) {
+            if (this.runStartMemo.get(i - back) === true) { spaced = false; break; }
+          }
+          start = spaced && this.random(i, 0x5dee1) < 0.11 * (0.45 + 0.55 * this.bias.descentScale);
+        }
+        this.runStartMemo.set(i, start);
+        this.runStartComputed = i;
+      }
+    }
+    return this.runStartMemo.get(index) === true;
+  }
+
+  /** The run's shape parameters, drawn once from its start chunk. */
+  private runSpec(start: number): { depth: number; deficit: number; bottom: number } {
+    const depth = (275 + this.random(start, 0x77aa1) * 320) * (0.5 + 0.5 * this.bias.descentScale);
+    const deficit = this.random(start, 0x77aa2) * Math.min(depth * 0.35, 130);
+    const bottom = this.random(start, 0x77aa3) < 0.55 ? 1 : 2;
+    return { depth, deficit, bottom };
+  }
+
+  /**
+   * Eased ends concentrate up to ~56% of the total on a single step for the
+   * shortest segment, so counts are chosen against the eased maximum step,
+   * not the average — every shaped chunk stays well inside the slope cap.
+   * Pure in the run's salts: the coverage machinery (runLength) and the
+   * height construction (runHeights) must always agree on the counts without
+   * ever re-entering the anchor walk.
+   */
+  private runStepCount(total: number): number {
+    let count = Math.max(2, Math.ceil(total / 118));
+    while (count < 6 && total * this.easeMaxFraction(count) > 126) count += 1;
+    return Math.min(count, 6);
+  }
+
+  /** The largest single-step share of `total` for an eased segment of `count` steps. */
+  private easeMaxFraction(count: number): number {
+    if (count <= 1) return 1;
+    let max = 0;
+    let sum = 0;
+    for (let i = 0; i < count; i += 1) {
+      const weight = i === 0 ? 0.55 : i === count - 1 ? 0.7 : 1;
+      max = Math.max(max, weight);
+      sum += weight;
+    }
+    return max / sum;
+  }
+
+  private runLength(start: number): number {
+    const cached = this.runLengths.get(start);
+    if (cached !== undefined) return cached;
+    const { depth, deficit, bottom } = this.runSpec(start);
+    // The climb spans depth − deficit by construction (the exit is simply
+    // entry + deficit — see runHeights), so the length is pure in the salts.
+    const length = this.runStepCount(depth) + bottom + this.runStepCount(Math.max(0, depth - deficit));
+    this.runLengths.set(start, length);
+    return length;
+  }
+
+  /** The start of the run owning chunk `index` (chunks start..start+length-1), or -1. */
+  private runStartCoveringChunk(index: number): number {
+    if (index < 6 || this.bias.descentScale <= 0) return -1;
+    const earliest = Math.max(6, index - RUN_MAX_LENGTH + 1);
+    for (let start = index; start >= earliest; start -= 1) {
+      if (!this.runStart(start)) continue;
+      if (start + this.runLength(start) > index) return start;
+    }
+    return -1;
+  }
+
+  /** The start of the run owning boundary `index` (boundaries start+1..start+length are shaped), or -1. */
+  private runStartCoveringBoundary(index: number): number {
+    if (index < 7 || this.bias.descentScale <= 0) return -1;
+    const earliest = Math.max(6, index - RUN_MAX_LENGTH);
+    for (let start = index - 1; start >= earliest; start -= 1) {
+      if (!this.runStart(start)) continue;
+      if (start + this.runLength(start) >= index) return start;
+    }
+    return -1;
+  }
+
+  /**
+   * Phase 15 — public hazard-planning query: true when `x` sits in a run's
+   * airborne corridor — the approach pad and crest lip at the entry, the
+   * landing arc of the natural launch down the first descent chunks, and the
+   * climb-out crest with its landing pad. Hazards are kept out of exactly
+   * these zones: a rider thrown by the lip cannot honor a grounded approach
+   * guarantee. The rest of the run (descent body, valley floor, climb wall)
+   * stays hazard space — the rider is grounded there, and the planner already
+   * models the slope-driven acceleration with the rider's own speed model.
+   */
+  inMountainRun(x: number): boolean {
+    if (this.bias.descentScale <= 0) return false;
+    const chunk = Math.floor(x / TERRAIN_CHUNK_WIDTH);
+    // Entry zone: chunks start-1 .. start+2.
+    for (let start = chunk + 1; start >= chunk - 2 && start >= 6; start -= 1) {
+      if (this.runStart(start)) return true;
+    }
+    // Exit zone: chunks start+length-1 .. start+length+1.
+    for (let start = chunk - 1; start >= chunk - RUN_MAX_LENGTH && start >= 6; start -= 1) {
+      if (!this.runStart(start)) continue;
+      const end = start + this.runLength(start);
+      if (chunk >= end - 1 && chunk <= end + 1) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Phase 15 — the shaped boundary heights of a deep mountain run: an eased
+   * descent of up to ~600 px, a short rounded bottom (never flat), and a climb
+   * that may deliberately fall short of the entry height so momentum carried
+   * from the descent decides how high the rider gets. All interior and exit
+   * boundaries are memoised into the anchor cache so the normal chain walk
+   * continues seamlessly from the run's exit.
+   */
+  private runHeights(runStart: number): number[] {
+    const cached = this.runAnchors.get(runStart);
+    if (cached) return cached;
+    const { depth, deficit, bottom } = this.runSpec(runStart);
+    const descent = this.runStepCount(depth);
+    const climb = this.runStepCount(Math.max(0, depth - deficit));
+    const entry = this.anchor(runStart);
+    // The valley floor is capped in absolute depth: at the extreme (a low
+    // entry anchor plus a max draw) the floor would otherwise push the rider
+    // past what the camera clamp can frame on short viewports. The cap only
+    // ever shrinks the shaped totals, so the salt-pure step counts above
+    // remain an upper bound — never under-sized.
+    const depthEff = Math.min(depth, Math.max(160, 480 - entry));
+    // The exit is simply `deficit` below the entry: the climb deliberately
+    // falls short, so momentum carried through the descent decides how high
+    // the rider gets. No snap band is needed here — the normal chain's own
+    // per-step limit bounds the walk away from any exit, and recovery stays
+    // suppressed through the two-chunk exit pad (inRunZone).
+    const exit = entry + deficit;
+    const deltas: number[] = [];
+    const pushEased = (count: number, total: number) => {
+      if (count <= 0 || total === 0) return;
+      // Eased first/last steps keep the curvature — and therefore the slope —
+      // gentle where the run meets the normal terrain chain.
+      const weights: number[] = [];
+      for (let i = 0; i < count; i += 1) weights.push(i === 0 ? 0.55 : i === count - 1 ? 0.7 : 1);
+      const sum = weights.reduce((a, b) => a + b, 0);
+      for (let i = 0; i < count; i += 1) deltas.push((total * weights[i]) / sum);
+    };
+    // Down the mountainside: y grows on screen, so the descent deltas are
+    // positive. A short rounded bottom (never flat) then climbs back toward
+    // the exit, falling `deficit` short of the entry height.
+    pushEased(descent, depthEff);
+    let bottomRise = 0;
+    if (bottom === 1) { deltas.push(-14); bottomRise += 14; }
+    else { deltas.push(-6); deltas.push(-22); bottomRise += 28; }
+    pushEased(climb, exit - (entry + depthEff - bottomRise));
+    const heights = [entry];
+    let height = entry;
+    for (const delta of deltas) { height += delta; heights.push(height); }
+    // Memoise every boundary the run shapes (interior + exit); the entry and
+    // the chunk after the exit stay with the normal chain.
+    for (let s = 1; s < heights.length; s += 1) this.anchors.set(runStart + s, heights[s]);
+    this.runAnchors.set(runStart, heights);
+    this.buildRunLips(runStart, heights.length - 1);
+    return heights;
+  }
+
+  /**
+   * Phase 15 — the crest lips of a run. A lip is a short (≈150 px) convex
+   * cosine² dip centred just past a run boundary: at the entry it sharpens
+   * the ridge the rider launches from into the descent, at the exit it turns
+   * the climb-out crest into a momentum reward. The curvature at the crest is
+   * 2π²·A/w² — with A ≈ 8 px and w ≈ 150 px a rider above ~335 px/s unweights
+   * and flies; at cruise the wheels stay planted. The amplitude is clamped to
+   * the local slope headroom so the cap holds everywhere.
+   */
+  private buildRunLips(runStart: number, length: number): void {
+    const lips: { xc: number; w: number; a: number }[] = [];
+    const width = 110 + this.random(runStart, 0x77aa4) * 25;
+    const chunkSlope = (index: number) => Math.max(
+      Math.abs(this.tangent(index)),
+      Math.abs(this.tangent(index + 1)),
+      Math.abs(this.anchor(index + 1) - this.anchor(index)) * 1.875 / TERRAIN_CHUNK_WIDTH,
+    );
+    const pushLip = (boundary: number, approach: number, steep: number, salt: number) => {
+      const raw = 7.5 + this.random(runStart, salt) * 2.5;
+      const headroom = Math.max(0, TERRAIN_MAX_SLOPE - Math.max(chunkSlope(approach), chunkSlope(steep)));
+      const a = Math.min(raw, headroom * 0.9 * width / Math.PI);
+      if (a >= 1.5) lips.push({ xc: boundary * TERRAIN_CHUNK_WIDTH + width * 0.12, w: width, a });
+    };
+    pushLip(runStart, runStart - 1, runStart, 0x77aa5);
+    pushLip(runStart + length, runStart + length - 1, runStart + length, 0x77aa6);
+    this.runLips.set(runStart, lips);
+  }
+
+  /** Phase 15 — the lip overlay at a sample position (flow levels only). */
+  private lipAt(index: number, x: number): number {
+    if (this.bias.descentScale <= 0) return 0;
+    const scratch = this.lipScratch;
+    let count = 0;
+    const ahead = this.runStartCoveringChunk(index + 1);
+    const here = this.runStartCoveringChunk(index);
+    const behind = this.runStartCoveringChunk(index - 1);
+    if (ahead >= 0) scratch[count++] = ahead;
+    if (here >= 0 && here !== ahead) scratch[count++] = here;
+    if (behind >= 0 && behind !== ahead && behind !== here) scratch[count++] = behind;
+    let total = 0;
+    for (let i = 0; i < count; i += 1) {
+      const lips = this.runLips.get(scratch[i]);
+      if (!lips) continue;
+      for (const lip of lips) {
+        const u = x - lip.xc;
+        if (u > -lip.w * 0.5 && u < lip.w * 0.5) total -= lip.a * Math.cos(Math.PI * u / lip.w) ** 2;
+      }
+    }
+    return total;
   }
 
   /**
@@ -69,7 +337,12 @@ export class TerrainGenerator {
    * exactly as before, so determinism and levels 1–4 are unchanged.
    */
   private anchor(index: number): number {
-    if (index <= 1 || this.recovery(index) || this.recovery(index - 1)) return 0;
+    if (index <= 1) return 0;
+    // Phase 15 — shaped boundaries of a deep mountain run are authoritative:
+    // neither the recovery reset nor the random draw may touch them.
+    const runStart = this.runStartCoveringBoundary(index);
+    if (runStart >= 0) return this.runHeights(runStart)[index - runStart];
+    if (this.recovery(index) || this.recovery(index - 1)) return 0;
     const cached = this.anchors.get(index);
     if (cached !== undefined) return cached;
     const range = PROFILES[this.configuration.environment].range * this.configuration.terrain.heightScale * this.bias.rangeScale;
@@ -78,6 +351,13 @@ export class TerrainGenerator {
     const chain: number[] = [];
     let current = index;
     while (current > 1 && !this.anchors.has(current) && !this.recovery(current) && !this.recovery(current - 1)) {
+      // Phase 15 — never walk *through* an unbuilt run: building it memoises
+      // its shaped anchors, which become the known base for this walk.
+      const covering = this.runStartCoveringBoundary(current);
+      if (covering >= 0) {
+        this.runHeights(covering);
+        continue;
+      }
       chain.push(current);
       current -= 1;
     }
@@ -90,6 +370,20 @@ export class TerrainGenerator {
     return previous;
   }
 
+  /**
+   * Phase 15 — the flow-spline tangent at a chunk boundary: the centred
+   * difference of the neighbouring anchors, clamped well inside the slope cap.
+   * Boundary 0 (the level seam) stays flat so adjacent level terrains join
+   * exactly as they did with the classic curve.
+   */
+  private tangent(index: number): number {
+    // The level's opening runway (and the seam at local x = 0) stays perfectly
+    // flat: the start house, windmill and rollout all live there.
+    if (index <= 2) return 0;
+    const raw = (this.anchor(index + 1) - this.anchor(index - 1)) / (2 * TERRAIN_CHUNK_WIDTH);
+    return clamp(raw, -FLOW_TANGENT_LIMIT, FLOW_TANGENT_LIMIT);
+  }
+
   chunk(index: number): TerrainChunk {
     const cached = this.chunks.get(index);
     if (cached) return cached;
@@ -98,16 +392,29 @@ export class TerrainGenerator {
     const delta = endHeight - startHeight;
     const choice = this.random(index, 0x581b);
     const recovery = this.recovery(index);
+    const inRun = this.runStartCoveringChunk(index) >= 0;
     // Phase 9C — the profile's valley bias shifts the valley/rolling/ramp split
-    // while every branch remains reachable.
+    // while every branch remains reachable. Phase 15 — chunks inside a deep
+    // mountain run always read as descent/climb: their drama is the run
+    // itself, and a local bump would only chop the flow.
     const valleyCut = 0.38 + this.bias.valleyBias;
     const rampCut = 0.84 - this.bias.valleyBias * 0.5;
     const pattern: TerrainPattern = recovery ? 'recovery'
+      : inRun ? (delta >= 0 ? 'downhill' : 'uphill')
       : delta > 16 ? 'downhill' : delta < -16 ? 'uphill'
       : choice < valleyCut ? 'valley' : choice < rampCut ? 'rolling-hill' : 'ramp';
-    // The quintic interpolation has max derivative 1.875; the bump is
-    // conservatively bounded by 6. Their combined slope stays below the cap.
-    const slopeBudget = Math.max(0, TERRAIN_MAX_SLOPE - Math.abs(delta) * 1.875 / TERRAIN_CHUNK_WIDTH);
+    // The classic quintic interpolation has max derivative 1.875; the flow
+    // spline adds the boundary tangents. In both cases the bump is
+    // conservatively bounded by 6 against the anchor slope actually in play,
+    // so the combined slope stays below the cap.
+    const anchorSlope = this.flow
+      ? Math.max(
+        Math.abs(this.tangent(index)),
+        Math.abs(this.tangent(index + 1)),
+        Math.abs(delta) * 1.875 / TERRAIN_CHUNK_WIDTH,
+      )
+      : Math.abs(delta) * 1.875 / TERRAIN_CHUNK_WIDTH;
+    const slopeBudget = Math.max(0, TERRAIN_MAX_SLOPE - anchorSlope);
     const desired = PROFILES[this.configuration.environment].bump * this.bias.bumpScale
       * (0.65 + this.configuration.difficulty.progression * 0.35) * (0.65 + choice * 0.35);
     const amplitude = Math.min(desired, slopeBudget * TERRAIN_CHUNK_WIDTH / 6);
@@ -124,13 +431,37 @@ export class TerrainGenerator {
     const t = (x - index * TERRAIN_CHUNK_WIDTH) / TERRAIN_CHUNK_WIDTH;
     const chunk = this.chunk(index);
     const bump = 64 * t ** 3 * (1 - t) ** 3;
-    return chunk.startHeight + (chunk.endHeight - chunk.startHeight) * smooth(t) + chunk.bump * bump;
+    if (!this.flow) {
+      return chunk.startHeight + (chunk.endHeight - chunk.startHeight) * smooth(t) + chunk.bump * bump;
+    }
+    // Phase 15 — the flow spline: a quintic Hermite carrying the boundary
+    // tangent m = (h[i+1] − h[i−1]) / 2W. Curvature is zero at both ends of
+    // every chunk (the k terms are pinned to 0), so adjacent chunks match in
+    // position, slope AND curvature — chained anchors render as one continuous
+    // mountainside. With equal consecutive deltas the curve degenerates to a
+    // perfectly straight slope; with alternating anchors it eases like the
+    // classic smoothstep.
+    const t2 = t * t;
+    const t3 = t2 * t;
+    const t4 = t3 * t;
+    const t5 = t4 * t;
+    const m0 = this.tangent(index) * TERRAIN_CHUNK_WIDTH;
+    const m1 = this.tangent(index + 1) * TERRAIN_CHUNK_WIDTH;
+    return chunk.startHeight * (1 - 10 * t3 + 15 * t4 - 6 * t5)
+      + chunk.endHeight * (10 * t3 - 15 * t4 + 6 * t5)
+      + m0 * (t - 6 * t3 + 8 * t4 - 3 * t5)
+      + m1 * (-4 * t3 + 7 * t4 - 3 * t5)
+      + chunk.bump * bump
+      + this.lipAt(index, x);
   }
 
   /** Phase 5A diagnostics: the chunk index and pattern at a position. */
-  describe(x: number): { index: number; pattern: TerrainPattern } {
+  describe(x: number): { index: number; pattern: TerrainPattern; inRun: boolean } {
     const index = Math.max(0, Math.floor(x / TERRAIN_CHUNK_WIDTH));
-    return { index, pattern: this.chunk(index).pattern };
+    // Phase 15 — run membership lets the repetition audit tell designed
+    // mountain runs (long same-pattern stretches by construction) apart from
+    // the classic variety machinery it polices.
+    return { index, pattern: this.chunk(index).pattern, inRun: this.runStartCoveringChunk(index) >= 0 };
   }
 
   /**
@@ -190,6 +521,15 @@ export class TerrainWorld {
     return origin.offset + this.generator(origin).heightAt(x - origin.x);
   }
 
+  /** Phase 15 — deep-mountain-run query, delegated to the owning generator. */
+  inMountainRun(x: number): boolean {
+    let origin = this.origins[0];
+    for (let index = this.origins.length - 1; index >= 0; index -= 1) {
+      if (x >= this.origins[index].x) { origin = this.origins[index]; break; }
+    }
+    return this.generator(origin).inMountainRun(x - origin.x);
+  }
+
   /** Terrain complexity across a window, delegated to the owning generator. */
   complexity(fromX: number, toX: number): number {
     let origin = this.origins[0];
@@ -200,13 +540,13 @@ export class TerrainWorld {
   }
 
   /** Phase 5A diagnostics: the terrain chunk and pattern under a position. */
-  describe(x: number): { level: number; index: number; pattern: TerrainPattern } | undefined {
+  describe(x: number): { level: number; index: number; pattern: TerrainPattern; inRun: boolean } | undefined {
     let origin = this.origins[0];
     for (let index = this.origins.length - 1; index >= 0; index -= 1) {
       if (x >= this.origins[index].x) { origin = this.origins[index]; break; }
     }
     const chunk = this.generator(origin).describe(x - origin.x);
-    return { level: origin.level, index: chunk.index, pattern: chunk.pattern };
+    return { level: origin.level, index: chunk.index, pattern: chunk.pattern, inRun: chunk.inRun };
   }
 
   maintain(cameraX: number, width: number): void {

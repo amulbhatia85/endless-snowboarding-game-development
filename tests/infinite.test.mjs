@@ -108,6 +108,8 @@ function validConfiguration(level) {
   assert.ok(level.profile.terrain.bumpScale >= 0.3 && level.profile.terrain.bumpScale <= 1.3);
   assert.ok(level.profile.terrain.recoveryScale >= 0.55 && level.profile.terrain.recoveryScale <= 1.45);
   assert.ok(Math.abs(level.profile.terrain.valleyBias) <= 0.12);
+  // Phase 15 — deep mountain runs: 0 (never) .. 1 (the mountain-descent identity).
+  assert.ok(level.profile.terrain.descentScale >= 0 && level.profile.terrain.descentScale <= 1);
   assert.ok(level.allowedObstacles.length >= 3);
   assert.ok(level.weather.intensity >= 0 && level.weather.intensity <= 0.95);
   assert.ok(level.weather.speed >= 0.2 && level.weather.speed <= 1.5);
@@ -134,7 +136,7 @@ test('Levels 1–20 produce valid, deterministic configurations with the classic
     assert.equal(level.environment, expected.environment);
     assert.equal(level.name, expected.name);
     assert.equal(level.profile.id, 'classic');
-    assert.deepEqual(level.profile.terrain, { rangeScale: 1, bumpScale: 1, recoveryScale: 1, valleyBias: 0 });
+    assert.deepEqual(level.profile.terrain, { rangeScale: 1, bumpScale: 1, recoveryScale: 1, valleyBias: 0, descentScale: 0 });
     assert.deepEqual(level.obstacleFocus, []);
     if (number === '1') assert.deepEqual(level.weather, { kind: 'clear', intensity: 0, speed: 1 });
     if (number === '2') assert.deepEqual(level.weather, { kind: 'snow', intensity: 0.5, speed: 0.38 });

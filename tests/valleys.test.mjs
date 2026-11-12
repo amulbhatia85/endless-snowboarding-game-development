@@ -269,7 +269,7 @@ test('Planner places gorges and boulders on real mountain terrain with valid met
   for (const { level } of snowyLevels(7, 5)) {
     const terrain = new TerrainGenerator(level);
     const surface = (x) => 360 + terrain.heightAt(x);
-    for (const plan of planSequence(level, 26, surface)) {
+    for (const plan of planSequence(level, 60, surface)) {
       for (const obstacle of plan.obstacles) {
         assert.equal(validPlacementMetadata(obstacle.plan), true, `${plan.patternId} metadata validates`);
         if (obstacle.kind === 'gap' && obstacle.plan.obstacleId === 'gorge') {

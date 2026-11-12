@@ -1542,7 +1542,7 @@ export class SnowGameEngine {
         candidateX: run.nextHazardX,
         riderX: run.rider.x,
         riderSpeed: run.rider.speed,
-        riderAcceleration: Math.tan(run.rider.rotation) * 230 + 8 + difficulty * 9,
+        riderAcceleration: Math.tan(run.rider.rotation) * 300 + 8 + difficulty * 9,
         surface: (x) => this.terrainAt(x),
         clearUntil: run.hazardClearUntil ?? 640,
         bridgeAllowedAfter: crossing ? run.nextBridgeX - 2700 : run.nextBridgeX,
@@ -1556,20 +1556,29 @@ export class SnowGameEngine {
         recentPatterns: run.recentPatterns,
         hint: eventGameplay.prefer.length ? { prefer: eventGameplay.prefer } : undefined,
       });
-      run.objects.push(...plan.obstacles);
+      // Phase 15 — hazards never land inside a deep mountain run (padded for
+      // the crest lips and their landing arcs): the runs are the flow
+      // sections, and a natural launch inside a hazard corridor would void
+      // the grounded-approach fairness the planner validates. Dropping placed
+      // hazards only widens spacing, so every spacing floor still holds.
+      const mountainRun = (x: number) => this.terrain !== undefined && this.terrain.inMountainRun(x);
+      const placed = plan.obstacles.some((obstacle) => mountainRun(obstacle.x))
+        ? plan.obstacles.filter((obstacle) => !mountainRun(obstacle.x))
+        : plan.obstacles;
+      run.objects.push(...placed);
       // Phase 7 — coins that now sit inside a newly placed hazard's collision
       // space are removed so no glowstone is ever unreachable or dangerous.
       run.objects = run.objects.filter((object) =>
         object.kind !== 'coin' || !this.coinBlocked(run, object.x, object.offset ?? 42));
       run.hazardClearUntil = Math.max(run.hazardClearUntil ?? 0, plan.clearUntil);
-      for (const obstacle of plan.obstacles) {
+      for (const obstacle of placed) {
         if (obstacle.bridged) run.nextBridgeX = obstacle.x + (obstacle.width ?? 0) + 4500;
         // Phase 13 — a boulder's clock starts when it enters the stream: the
         // planner's phase draw becomes the release timestamp so the pose is
         // fully determined by (spawn x, surface, run.elapsed).
         if (obstacle.kind === 'ice-boulder') obstacle.phase = run.elapsed;
       }
-      if (plan.obstacles.length) {
+      if (placed.length) {
         run.recentPatterns = [...(run.recentPatterns ?? []), plan.patternId]
           .slice(-directive.recentPatternMemory);
         this.lastPlanInfo = {
@@ -1586,13 +1595,13 @@ export class SnowGameEngine {
       }
       this.planAttempts += 1;
       this.rejectionCount += plan.rejected.length;
-      for (const obstacle of plan.obstacles) this.placementTelemetry.push({ x: obstacle.x, kind: obstacle.kind });
+      for (const obstacle of placed) this.placementTelemetry.push({ x: obstacle.x, kind: obstacle.kind });
       this.placementTelemetry = this.placementTelemetry.filter((entry) => entry.x > run.rider.x - 14000);
       if (this.obstacleDebug) this.obstacleRejections = [...this.obstacleRejections, ...plan.rejected].slice(-24);
       // Phase 9E — dev-only: re-validate every placed obstacle with the
       // independent physics auditor (live fairness detection).
       if (this.obstacleDebug) {
-        for (const obstacle of plan.obstacles) {
+        for (const obstacle of placed) {
           const violations = validateObstaclePlacement(obstacle, (x) => this.terrainAt(x));
           if (violations.length) this.fairnessViolations = [...this.fairnessViolations, ...violations].slice(-24);
         }
@@ -1710,7 +1719,12 @@ export class SnowGameEngine {
       if (rollout < 1) {
         rider.speed = 250 * rollout * rollout * (3 - 2 * rollout);
       } else {
-        rider.speed += (slope * 230 * (onIce ? 1.35 : 1) + 8 + difficulty * 9) * delta;
+        // Phase 15 — gravity owns the speed: slope input is strong enough that
+        // a long steep descent visibly winds the bicycle up toward the cap and
+        // a real climb bleeds it back down, so momentum carried out of a
+        // valley decides how high the next mountain feels. The clamp keeps the
+        // validated speed band (the feasibility grid rides 205..475) intact.
+        rider.speed += (slope * 300 * (onIce ? 1.35 : 1) + 8 + difficulty * 9) * delta;
         rider.speed = clamp(rider.speed, BICYCLE_PHYSICS.minSpeed, BICYCLE_PHYSICS.maxSpeed);
       }
       rider.x += rider.speed * delta;
@@ -1733,11 +1747,37 @@ export class SnowGameEngine {
         rider.flipElapsed = undefined;
         this.emit({ type: 'ledge' });
       } else {
-        rider.y = this.rideHeight(run, rider.x) - 5;
-        const targetAngle = this.rideAngle(run, rider.x);
-        rider.rotation = onIce
-          ? rider.rotation + shortAngleDelta(targetAngle - rider.rotation) * (1 - Math.exp(-4.5 * delta))
-          : targetAngle;
+        const groundY = this.rideHeight(run, rider.x) - 5;
+        // Phase 15 — natural crest launches: while grounded the terrain must
+        // supply the centripetal force to bend the rider's path. When the
+        // surface curves away faster than gravity can (v²·h″ > g — convex
+        // curvature outrunning the ballistic arc), the wheels unload and the
+        // rider leaves the ground along the tangent they were riding, no
+        // input needed. Constant slopes never launch (h″ ≈ 0); sharp crests at
+        // speed do. The 240 px/s floor keeps slow rolling bumps glued down, so
+        // this only ever rewards momentum. The 0.85 factor is suspension
+        // unweighting — a touch of game feel on top of the physics.
+        if (rider.speed > 240) {
+          const probe = 10;
+          const ahead = this.rideHeight(run, rider.x + probe);
+          const center = this.rideHeight(run, rider.x);
+          const behind = this.rideHeight(run, rider.x - probe);
+          const curvature = (ahead - 2 * center + behind) / (probe * probe);
+          if (rider.speed * rider.speed * curvature > BICYCLE_PHYSICS.gravity * 0.85) {
+            rider.grounded = false;
+            rider.vy = Math.tan(rider.rotation) * rider.speed;
+            rider.airTime = 0;
+            rider.totalSpin = 0;
+            rider.flipElapsed = undefined;
+          }
+        }
+        if (rider.grounded) {
+          rider.y = groundY;
+          const targetAngle = this.rideAngle(run, rider.x);
+          rider.rotation = onIce
+            ? rider.rotation + shortAngleDelta(targetAngle - rider.rotation) * (1 - Math.exp(-4.5 * delta))
+            : targetAngle;
+        }
       }
     }
 
@@ -1805,14 +1845,28 @@ export class SnowGameEngine {
     }
     if (this.checkCollision(run)) return;
 
-    if (rider.y > this.height + 115) {
+    // Phase 15 — the fall crash is terrain-relative: deep mountain valleys
+    // legitimately put the rider hundreds of pixels below the old absolute
+    // bound, so a chasm fall is detected against the local surface instead
+    // (and the camera freeze keeps it from ever receding). The generous
+    // absolute backstop still catches any genuine fall out of the world.
+    const overChasm = rider.fallingInto || this.gapAt(run, rider.x);
+    if ((overChasm && rider.y > this.terrainAt(rider.x) + 150) || rider.y > this.height * 2.4) {
       this.emit({ type: 'crash', kind: 'fall' });
       this.finishRun(run, rider.fallingInto ? 'You fell into a chasm.' : 'A little too much open air.');
       return;
     }
 
     run.cameraX += (rider.x - this.width * this.riderScreenPosition(run) - run.cameraX) * (1 - Math.exp(-4.2 * delta));
-    const cameraTargetY = clamp((this.height * 0.62 - rider.y) * 0.12, -22, 28);
+    // Phase 15 — the camera now rides the big vertical swings: deep valley
+    // descents and tall climbs are followed at 72% gain (the rider still
+    // visibly drops and climbs against the frame, which is what sells the
+    // depth) with a clamp wide enough to never lose them off-screen. A fall
+    // into a chasm freezes the camera so the rider drops out of frame — the
+    // crash reads as the long fall it is.
+    const cameraTargetY = rider.fallingInto
+      ? run.cameraY
+      : clamp((this.height * 0.62 - rider.y) * 0.72, -this.height * 0.85, this.height * 0.5);
     run.cameraY += (cameraTargetY - run.cameraY) * (1 - Math.exp(-2.8 * delta));
     this.addTrail(run, delta);
     this.emitWheelSnow(run, delta);
@@ -3181,6 +3235,9 @@ export class SnowGameEngine {
     // palette and viewport, which are fixed within a frame, so every terrain
     // chunk fill in this frame shares one set (previously one gradient +
     // colour mix per chunk).
+    // Phase 15 — when the camera has followed the rider down into a deep
+    // valley, the ground fills must extend past the shifted canvas bottom.
+    const bottomY = height + 40 + (run ? Math.max(0, -run.cameraY) : 0);
     const ground = context.createLinearGradient(0, height * 0.54, 0, height);
     ground.addColorStop(0, palette.snow);
     ground.addColorStop(0.55, colorMix(palette.snow, palette.snowShade, 0.44));
@@ -3203,8 +3260,8 @@ export class SnowGameEngine {
       context.beginPath();
       context.moveTo(segment[0].x, segment[0].y);
       for (let index = 0; index < segmentLength; index += 1) context.lineTo(segment[index].x, segment[index].y);
-      context.lineTo(segment[segmentLength - 1].x, height + 40);
-      context.lineTo(segment[0].x, height + 40);
+      context.lineTo(segment[segmentLength - 1].x, bottomY);
+      context.lineTo(segment[0].x, bottomY);
       context.closePath();
       context.fillStyle = ground;
       context.fill();
@@ -3253,7 +3310,7 @@ export class SnowGameEngine {
         // lands before the rider reaches the lip.
         const deep = gap.plan?.obstacleId === 'gorge';
         const wallDrop = deep ? 46 : 26;
-        const gorge = context.createLinearGradient(0, Math.min(leftY, rightY), 0, height);
+        const gorge = context.createLinearGradient(0, Math.min(leftY, rightY), 0, bottomY);
         gorge.addColorStop(0, deep ? 'rgba(30,48,68,0.9)' : 'rgba(35,54,74,0.84)');
         gorge.addColorStop(1, deep ? 'rgba(8,20,36,0.99)' : 'rgba(13,30,47,0.96)');
         context.beginPath();
@@ -3261,8 +3318,8 @@ export class SnowGameEngine {
         context.lineTo(startX + (deep ? 12 : 8), leftY + wallDrop);
         context.lineTo(endX - (deep ? 12 : 8), rightY + wallDrop);
         context.lineTo(endX, rightY);
-        context.lineTo(endX, height + 40);
-        context.lineTo(startX, height + 40);
+        context.lineTo(endX, bottomY);
+        context.lineTo(startX, bottomY);
         context.closePath();
         context.fillStyle = gorge;
         context.fill();

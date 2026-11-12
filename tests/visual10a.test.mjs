@@ -251,6 +251,18 @@ test('Cadence bob animates the grounded rider within a tight envelope', () => {
   }
   const run = game.run;
   assert.ok(run.rider.grounded, 'riding grounded');
+  // Phase 15 — deep mountain runs put real slopes under the wheels: a rider
+  // carving a descent rotates with the terrain, which moves the silhouette
+  // top far more than the bob itself. Keep riding (bounded) until the sample
+  // window sits on locally flat ground, then measure the bob there.
+  for (let index = 0; index < 600; index += 1) {
+    if (game.run.over) break;
+    const x = run.rider.x;
+    const windowSlope = Math.abs(game.terrainAt(x + 260) - game.terrainAt(x - 60)) / 320;
+    if (windowSlope <= 0.04) break;
+    ride(game, 1);
+  }
+  assert.ok(!game.run.over, 'still riding');
   const riderX = Math.round(run.rider.x - run.cameraX);
   const rows = [];
   for (let index = 0; index < 7; index += 1) {

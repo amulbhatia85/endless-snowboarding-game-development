@@ -29,6 +29,12 @@ export interface TerrainBias {
   recoveryScale: number;
   /** Shifts the valley ↔ rolling ↔ ramp split (−0.12..0.12). */
   valleyBias: number;
+  /**
+   * Phase 15 — deep mountain runs (0..1): how strongly the level favours
+   * long, flowing descents into genuinely deep valleys and the climbs back
+   * out. 0 (classic prefix) never generates a run.
+   */
+  descentScale: number;
 }
 
 export interface LevelProfile {
@@ -38,17 +44,17 @@ export interface LevelProfile {
   terrain: TerrainBias;
 }
 
-const NEUTRAL_BIAS: TerrainBias = { rangeScale: 1, bumpScale: 1, recoveryScale: 1, valleyBias: 0 };
+const NEUTRAL_BIAS: TerrainBias = { rangeScale: 1, bumpScale: 1, recoveryScale: 1, valleyBias: 0, descentScale: 0 };
 
 /** The seven generated identities (levels ≥ 5). `classic` is the neutral prefix profile. */
 const PROFILE_BIASES: Record<Exclude<LevelProfileId, 'classic'>, TerrainBias> = {
-  'flowing-hills': { rangeScale: 0.9, bumpScale: 0.85, recoveryScale: 1.25, valleyBias: 0.04 },
-  'mountain-descent': { rangeScale: 1.55, bumpScale: 0.55, recoveryScale: 0.55, valleyBias: 0.12 },
-  'gradual-climb': { rangeScale: 0.95, bumpScale: 0.6, recoveryScale: 1.3, valleyBias: 0.06 },
-  'rolling-valleys': { rangeScale: 1.05, bumpScale: 1.1, recoveryScale: 0.95, valleyBias: 0.12 },
-  'technical-slopes': { rangeScale: 1.1, bumpScale: 1.3, recoveryScale: 0.6, valleyBias: -0.1 },
-  'controlled-flats': { rangeScale: 0.55, bumpScale: 0.35, recoveryScale: 1.45, valleyBias: 0.02 },
-  'mixed-terrain': { rangeScale: 1, bumpScale: 1, recoveryScale: 1, valleyBias: 0 },
+  'flowing-hills': { rangeScale: 0.9, bumpScale: 0.85, recoveryScale: 1.25, valleyBias: 0.04, descentScale: 0.15 },
+  'mountain-descent': { rangeScale: 1.55, bumpScale: 0.55, recoveryScale: 0.55, valleyBias: 0.12, descentScale: 0.95 },
+  'gradual-climb': { rangeScale: 0.95, bumpScale: 0.6, recoveryScale: 1.3, valleyBias: 0.06, descentScale: 0.25 },
+  'rolling-valleys': { rangeScale: 1.05, bumpScale: 1.1, recoveryScale: 0.95, valleyBias: 0.12, descentScale: 0.5 },
+  'technical-slopes': { rangeScale: 1.1, bumpScale: 1.3, recoveryScale: 0.6, valleyBias: -0.1, descentScale: 0.45 },
+  'controlled-flats': { rangeScale: 0.55, bumpScale: 0.35, recoveryScale: 1.45, valleyBias: 0.02, descentScale: 0 },
+  'mixed-terrain': { rangeScale: 1, bumpScale: 1, recoveryScale: 1, valleyBias: 0, descentScale: 0.35 },
 };
 
 const PROFILE_LABELS: Record<LevelProfileId, string> = {

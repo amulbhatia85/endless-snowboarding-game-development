@@ -1285,12 +1285,19 @@ export class EnvironmentManager {
     layerIndex: number,
     palette: Palette,
   ): void {
-    const { width, height, cameraX } = view;
+    const { width, height, cameraX, cameraY } = view;
     const step = 150;
     const offset = cameraX * layer.parallax;
     const first = Math.floor(offset / step) - 1;
     const last = Math.ceil((offset + width) / step) + 1;
-    const baseY = height * layer.baseY;
+    // Phase 15 — vertical parallax: distant ridges follow the camera's
+    // vertical swing far less than the near terrain does, so descending into
+    // a deep valley stacks the ranges overhead (real mountain-layering depth)
+    // while climbs release them again. The fill bottom extends past the
+    // shifted canvas so no gap can open under the layers.
+    const depthFactor = 0.35 + layer.parallax * 1.3;
+    const baseY = height * layer.baseY - cameraY * (1 - depthFactor);
+    const fillBottom = height + 20 - Math.min(0, cameraY);
     const amplitude = height * layer.amplitude;
     const seed = 4 + layerIndex * 15;
 
@@ -1303,7 +1310,7 @@ export class EnvironmentManager {
     fill = mixColor(fill, this.resolvedColors.fog, this.resolvedVeil[layerIndex] * this.weather.fog);
 
     context.beginPath();
-    context.moveTo(first * step - offset, height + 20);
+    context.moveTo(first * step - offset, fillBottom);
     for (let index = first; index <= last; index += 1) {
       const ridge = 0.2 + hash(index * 3.71 + seed) * 0.8;
       const shoulder = 0.25 + hash(index * 8.11 + seed + 7) * 0.5;
@@ -1315,7 +1322,7 @@ export class EnvironmentManager {
       context.lineTo(centerX, peakY);
       context.lineTo(centerX + step * (1 - shoulder), rightY);
     }
-    context.lineTo((last + 1) * step - offset, height + 20);
+    context.lineTo((last + 1) * step - offset, fillBottom);
     context.closePath();
     context.fillStyle = fill;
     context.fill();
