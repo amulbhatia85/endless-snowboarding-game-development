@@ -4,12 +4,12 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Afterglow — an endless snowboarding ride</title>
-<meta name="description" content="Carve deep mountain descents, catch the crest and fly. Five hand-tuned biomes, glowstones, achievements and combos — offline, with no account, on your own device." />
-<meta name="theme-color" content="#102032" />
+<meta name="description" content="Carve deep mountain descents and catch the crest. Five biomes, glowstones, combos — offline, no account. Play in your browser." />
+<meta name="theme-color" content="#0b1220" />
 
 <meta property="og:type" content="website" />
 <meta property="og:title" content="Afterglow — an endless snowboarding ride" />
-<meta property="og:description" content="Carve deep mountain descents, catch the crest and fly. Five biomes, offline, no account." />
+<meta property="og:description" content="Carve deep mountain descents and catch the crest. Offline, no account." />
 <meta property="og:image" content="assets/og.jpg" />
 <meta name="twitter:card" content="summary_large_image" />
 
@@ -17,19 +17,20 @@
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
 
 <style>
+  /*
+    Design language borrowed from the Alto's Adventure site: one continuous
+    column, flat vector silhouettes, a blocky two-line logotype dead centre,
+    everything centred, and a single dusk hue running top to bottom.
+  */
   :root {
-    --night: #102032;
-    --night-deep: #0a1420;
-    --ink: #0b1420;
-    --cream: #fff4dc;
-    --cream-soft: #f6f0e2;
+    --night: #0b1220;
+    --night-2: #0e1626;
+    --cream: #fdf3e3;
+    --cream-dim: rgba(253, 243, 227, 0.68);
+    --cream-faint: rgba(253, 243, 227, 0.42);
     --peach: #ffcf96;
     --peach-hot: #ff9e4f;
     --gold: #c28b50;
-    --gold-light: #e8c48d;
-    --violet: #6f5aa8;
-    --mist: #a8b6c8;
-    --line: rgba(255, 244, 220, 0.14);
   }
 
   * { box-sizing: border-box; }
@@ -44,759 +45,419 @@
     margin: 0;
     background: var(--night);
     color: var(--cream);
-    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-family: "Avenir Next", "Segoe UI", ui-sans-serif, system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif;
+    font-weight: 400;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
+    text-align: center;              /* Alto centres everything */
     overflow-x: hidden;
   }
 
-  img { display: block; max-width: 100%; height: auto; }
-
-  a { color: inherit; }
-
-  .wrap {
-    width: min(1120px, calc(100% - 48px));
+  .col {
+    width: min(760px, calc(100% - 56px));
     margin-inline: auto;
   }
-  @media (max-width: 560px) {
-    .wrap { width: calc(100% - 32px); }
-  }
+  @media (max-width: 560px) { .col { width: calc(100% - 40px); } }
 
-  /* ── Hero ─────────────────────────────────────────────── */
+  img, svg { display: block; max-width: 100%; }
+  a { color: inherit; }
+
+  /* ── Hero ────────────────────────────────────────────────────────── */
   .hero {
     position: relative;
-    min-height: 100svh;
-    display: grid;
-    align-items: center;
-    overflow: hidden;
-    isolation: isolate;
-  }
-
-  .hero__art {
-    position: absolute;
-    inset: 0;
-    z-index: -2;
-  }
-
-  .hero__art img {
     width: 100%;
-    height: 100%;
-    object-fit: cover;
-    object-position: 50% 42%;
-    /* the artwork's own sky is the top of the frame; keep the rider low */
-    transform: scale(1.02);
+    background: var(--night);
+    line-height: 0;                  /* kill the svg baseline gap */
   }
 
-  .hero__veil {
+  .hero__scene { width: 100%; height: auto; display: block; }
+
+  /* The logotype sits over the sky, exactly like Alto's wordmark block. */
+  .hero__lockup {
     position: absolute;
-    inset: 0;
-    z-index: -1;
-    background:
-      radial-gradient(120% 82% at 50% 106%, rgba(10, 20, 32, 0.72) 0%, rgba(10, 20, 32, 0) 62%),
-      linear-gradient(to bottom,
-        rgba(16, 32, 50, 0.66) 0%,
-        rgba(16, 32, 50, 0.34) 30%,
-        rgba(16, 32, 50, 0.18) 52%,
-        rgba(10, 20, 32, 0.86) 88%,
-        var(--night) 100%);
+    top: clamp(26px, 7.5vh, 92px);
+    left: 0; right: 0;
+    line-height: 1;
+    padding-inline: 20px;
+    pointer-events: none;
   }
 
-  .hero__inner {
-    padding: 120px 0 96px;
-    text-align: center;
-  }
-
-  .eyebrow {
-    margin: 0 0 22px;
-    font-size: 11px;
+  .presents {
+    margin: 0 0 clamp(12px, 2.2vh, 22px);
+    font-size: clamp(9px, 1.05vw, 13px);
     letter-spacing: 0.34em;
     text-transform: uppercase;
-    color: var(--gold-light);
+    color: rgba(253, 243, 227, 0.62);
+  }
+
+  .wordmark {
+    margin: 0;
+    font-size: clamp(2.55rem, 10.5vw, 6.6rem);
+    font-weight: 900;
+    letter-spacing: 0.055em;
+    text-transform: uppercase;
+    text-indent: 0.055em;            /* re-centre the tracking */
+    color: #2a1d2e;
+    /* Blocky, flat, slightly sunken — the print-like feel of the Alto mark */
+    text-shadow: 0 1px 0 rgba(255, 236, 208, 0.34);
+    line-height: 0.94;
+  }
+
+  .wordmark__sub {
+    display: block;
+    margin-top: 0.34em;
+    font-size: 0.5em;
+    letter-spacing: 0.2em;
+    text-indent: 0.2em;
+    font-weight: 800;
+    color: #2a1d2e;
     opacity: 0.92;
   }
 
-  .hero h1 {
-    margin: 0;
-    font-size: clamp(3.4rem, 13vw, 8.2rem);
-    line-height: 0.86;
-    font-weight: 300;
-    letter-spacing: 0.1em;
-    text-indent: 0.1em;
-    text-transform: uppercase;
-    text-shadow: 0 18px 60px rgba(6, 14, 24, 0.55);
-  }
-
-  .hero__tag {
-    margin: 30px auto 0;
-    max-width: 30ch;
-    font-size: clamp(1rem, 2.3vw, 1.3rem);
-    line-height: 1.65;
-    font-weight: 300;
-    color: rgba(255, 244, 220, 0.9);
-    letter-spacing: 0.01em;
-  }
-
-  .hero__rule {
-    width: 46px;
-    height: 1px;
-    margin: 38px auto 0;
-    background: var(--gold);
-    opacity: 0.75;
-    border: 0;
-  }
-
-  /* ── Buttons ──────────────────────────────────────────── */
-  .cta-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 14px;
-    justify-content: center;
-    align-items: center;
-    margin-top: 40px;
-  }
-
-  .btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 11px;
-    padding: 15px 30px;
-    border-radius: 999px;
-    font-size: 0.95rem;
-    font-weight: 500;
-    letter-spacing: 0.02em;
-    text-decoration: none;
-    border: 1px solid transparent;
-    transition: transform 0.22s ease, background-color 0.22s ease, border-color 0.22s ease, box-shadow 0.22s ease;
-    will-change: transform;
-  }
-  .btn:hover { transform: translateY(-2px); }
-  .btn:focus-visible {
-    outline: 2px solid var(--peach);
-    outline-offset: 4px;
-  }
-
-  .btn--primary {
-    background: var(--cream);
-    color: var(--ink);
-    box-shadow: 0 14px 34px rgba(255, 207, 150, 0.16);
-  }
-  .btn--primary:hover {
-    background: #fff;
-    box-shadow: 0 18px 44px rgba(255, 207, 150, 0.28);
-  }
-
-  .btn--ghost {
-    border-color: rgba(255, 244, 220, 0.32);
-    color: var(--cream);
-    background: rgba(255, 255, 255, 0.04);
-  }
-  .btn--ghost:hover {
-    border-color: rgba(255, 244, 220, 0.6);
-    background: rgba(255, 255, 255, 0.09);
-  }
-
-  .play-dot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    background: var(--peach-hot);
-    box-shadow: 0 0 0 4px rgba(255, 158, 79, 0.18);
-    flex: none;
-  }
-
-  /* ── Store chips ──────────────────────────────────────── */
-  .stores {
-    margin-top: 34px;
-    display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-    justify-content: center;
-    align-items: center;
-  }
-
-  .chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 9px;
-    padding: 10px 17px;
-    border-radius: 10px;
-    border: 1px solid rgba(255, 244, 220, 0.18);
-    background: rgba(10, 20, 32, 0.32);
-    backdrop-filter: blur(8px);
-    font-size: 0.78rem;
-    color: rgba(255, 244, 220, 0.86);
-    white-space: nowrap;
-  }
-
-  .chip svg { flex: none; opacity: 0.85; }
-
-  .chip__soon {
-    font-size: 9px;
-    letter-spacing: 0.16em;
-    text-transform: uppercase;
-    color: var(--gold-light);
-    padding-left: 10px;
-    margin-left: 2px;
-    border-left: 1px solid rgba(255, 244, 220, 0.2);
-  }
-
-  .scroll-hint {
-    margin-top: 58px;
-    display: inline-flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 10px;
-    font-size: 9.5px;
-    letter-spacing: 0.3em;
-    text-transform: uppercase;
-    color: rgba(255, 244, 220, 0.5);
-    text-decoration: none;
-  }
-
-  .scroll-hint span {
-    width: 1px; height: 34px;
-    background: linear-gradient(to bottom, rgba(255, 244, 220, 0.42), transparent);
-  }
-
-  /* ── Sections ─────────────────────────────────────────── */
-  section { position: relative; }
-
-  .section {
-    padding: clamp(84px, 13vw, 148px) 0;
-  }
-
-  .section--cream {
-    background: var(--cream-soft);
-    color: var(--ink);
-  }
-
-  .section--night {
+  /* ── The long flat column ────────────────────────────────────────── */
+  .band {
+    padding: clamp(52px, 9vw, 96px) 0;
     background: var(--night);
   }
 
-  .kicker {
-    margin: 0 0 16px;
-    font-size: 10.5px;
-    letter-spacing: 0.3em;
-    text-transform: uppercase;
-    color: var(--gold);
-  }
-  .section--cream .kicker { color: #a4741f; }
-
-  h2 {
-    margin: 0;
-    font-weight: 300;
-    font-size: clamp(1.9rem, 4.6vw, 3.15rem);
-    line-height: 1.14;
-    letter-spacing: -0.015em;
-    max-width: 20ch;
-  }
-
-  .section--cream h2 { color: var(--ink); }
+  .band--tight { padding-block: clamp(34px, 5vw, 56px); }
 
   .lede {
-    margin: 22px 0 0;
-    max-width: 56ch;
-    font-size: clamp(1rem, 1.7vw, 1.12rem);
-    line-height: 1.78;
-    font-weight: 300;
-    color: var(--mist);
-  }
-  .section--cream .lede { color: #4a5560; }
-
-  /* ── Feature grid ─────────────────────────────────────── */
-  .features {
-    margin-top: clamp(48px, 7vw, 72px);
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(232px, 1fr));
-    gap: 1px;
-    background: rgba(11, 20, 32, 0.1);
-    border: 1px solid rgba(11, 20, 32, 0.1);
-  }
-  .section--cream .features { background: rgba(11,20,32,0.09); }
-
-  .feature {
-    background: var(--cream-soft);
-    padding: 34px 28px 38px;
-  }
-
-  .feature__n {
-    font-size: 10px;
-    letter-spacing: 0.26em;
-    color: #a4741f;
-    margin: 0 0 18px;
-  }
-
-  .feature h3 {
-    margin: 0 0 12px;
-    font-size: 1.06rem;
-    font-weight: 500;
-    letter-spacing: -0.005em;
-    color: var(--ink);
-  }
-
-  .feature p {
-    margin: 0;
-    font-size: 0.92rem;
-    line-height: 1.72;
-    color: #55606b;
-    font-weight: 300;
-  }
-
-  /* ── Biomes ───────────────────────────────────────────── */
-  .biomes {
-    margin-top: clamp(48px, 7vw, 70px);
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 16px;
-  }
-
-  .biome {
-    position: relative;
-    padding: 26px 24px 28px;
-    border: 1px solid var(--line);
-    border-radius: 4px;
-    background: linear-gradient(165deg, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.012));
-    overflow: hidden;
-    transition: border-color 0.3s ease, transform 0.3s ease;
-  }
-  .biome:hover { border-color: rgba(255, 207, 150, 0.42); transform: translateY(-3px); }
-
-  .biome::after {
-    content: "";
-    position: absolute;
-    inset: auto 0 0 0;
-    height: 2px;
-    background: var(--swatch, var(--peach));
-    opacity: 0.75;
-  }
-
-  .biome h3 {
-    margin: 0 0 7px;
-    font-size: 1rem;
+    margin: 0 auto;
+    max-width: 46ch;
+    font-size: clamp(0.95rem, 1.9vw, 1.16rem);
+    line-height: 1.85;
+    color: var(--cream-dim);
     font-weight: 400;
+  }
+
+  .status {
+    margin: 0;
+    font-size: clamp(1.02rem, 2.4vw, 1.42rem);
     letter-spacing: 0.02em;
     color: var(--cream);
+    font-weight: 500;
   }
 
-  .biome p {
-    margin: 0;
-    font-size: 0.845rem;
-    line-height: 1.66;
-    color: rgba(168, 182, 200, 0.94);
-    font-weight: 300;
+  /* ── Big centered action ─────────────────────────────────────────── */
+  .action {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    margin: 0 auto;
+    padding: 17px 44px;
+    border: 0;
+    border-radius: 3px;
+    background: var(--peach);
+    color: #23180f;
+    font: inherit;
+    font-size: clamp(0.92rem, 1.9vw, 1.06rem);
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background-color 0.2s ease, transform 0.2s ease;
+  }
+  .action:hover { background: #ffdcb0; transform: translateY(-1px); }
+  .action:focus-visible { outline: 2px solid var(--peach-hot); outline-offset: 4px; }
+
+  .action__dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: #23180f; opacity: 0.5;
   }
 
-  /* ── Gallery ──────────────────────────────────────────── */
-  .gallery {
-    margin-top: clamp(44px, 6vw, 64px);
+  .hint {
+    margin: 18px 0 0;
+    font-size: 0.8rem;
+    color: var(--cream-faint);
+    letter-spacing: 0.04em;
+  }
+
+  /* ── Store chips, quiet and unsold ───────────────────────────────── */
+  .stores {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    justify-content: center;
+    margin-top: 8px;
+  }
+
+  .store {
+    display: inline-flex;
+    align-items: center;
+    gap: 9px;
+    padding: 11px 20px;
+    border: 1px solid rgba(253, 243, 227, 0.16);
+    border-radius: 3px;
+    font-size: 0.82rem;
+    color: rgba(253, 243, 227, 0.72);
+    letter-spacing: 0.03em;
+  }
+  .store svg { opacity: 0.7; flex: none; }
+  .store em {
+    font-style: normal;
+    font-size: 9.5px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--gold);
+    padding-left: 10px;
+    border-left: 1px solid rgba(253, 243, 227, 0.16);
+  }
+
+  /* ── Screens, in a plain centered row like Alto's gallery ────────── */
+  .screens {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-    gap: 18px;
+    grid-template-columns: repeat(2, 1fr);
+    gap: clamp(14px, 2.6vw, 26px);
+    width: min(980px, calc(100% - 56px));
+    margin-inline: auto;
   }
+  @media (max-width: 620px) { .screens { grid-template-columns: 1fr; } }
 
-  .shot {
+  .screen {
     position: relative;
-    aspect-ratio: 16 / 10;
-    border-radius: 4px;
+    margin: 0;
+    aspect-ratio: 16 / 9;
     overflow: hidden;
+    border-radius: 3px;
     background:
-      radial-gradient(120% 100% at 20% 0%, rgba(111, 90, 168, 0.5), transparent 60%),
-      radial-gradient(100% 100% at 85% 100%, rgba(255, 158, 79, 0.32), transparent 62%),
-      linear-gradient(160deg, #17293e, #0c1826 72%);
-    border: 1px solid var(--line);
+      radial-gradient(90% 120% at 30% 0%, rgba(120, 96, 170, 0.55), transparent 62%),
+      radial-gradient(90% 120% at 80% 100%, rgba(255, 158, 79, 0.28), transparent 60%),
+      linear-gradient(165deg, #182238, #0a111d);
     display: grid;
     place-items: center;
-    text-align: center;
-    padding: 20px;
   }
 
-  /* When a real capture is added at assets/screens/NN.jpg it simply covers
-     the frame; the placeholder styling disappears underneath it. */
-  .shot img {
-    position: absolute;
-    inset: 0;
-    width: 100%;
-    height: 100%;
+  .screen img {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
     object-fit: cover;
     z-index: 1;
   }
 
-  .shot__label {
-    position: relative;
-    z-index: 0;
-    font-size: 10px;
+  .screen__cap {
+    position: relative; z-index: 0;
+    font-size: 9.5px;
+    letter-spacing: 0.28em;
+    text-transform: uppercase;
+    color: rgba(253, 243, 227, 0.44);
+    line-height: 2.1;
+  }
+  .screen__cap b {
+    display: block;
+    font-weight: 500;
+    font-size: 11.5px;
+    letter-spacing: 0.1em;
+    text-transform: none;
+    color: rgba(253, 243, 227, 0.8);
+  }
+
+  /* ── Feature list: centered, unboxed — Alto never uses cards ─────── */
+  .facts {
+    list-style: none;
+    margin: 0 auto;
+    padding: 0;
+    max-width: 42ch;
+    display: grid;
+    gap: clamp(26px, 4vw, 40px);
+  }
+
+  .fact h3 {
+    margin: 0 0 9px;
+    font-size: clamp(0.98rem, 2vw, 1.1rem);
+    font-weight: 600;
+    letter-spacing: 0.01em;
+    color: var(--cream);
+  }
+
+  .fact p {
+    margin: 0;
+    font-size: clamp(0.9rem, 1.7vw, 0.99rem);
+    line-height: 1.85;
+    color: var(--cream-dim);
+  }
+
+  .title {
+    margin: 0 0 clamp(30px, 5vw, 52px);
+    font-size: clamp(1.25rem, 3.1vw, 1.85rem);
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    color: var(--cream);
+  }
+
+  .rule {
+    width: 34px;
+    height: 1px;
+    margin: clamp(44px, 7vw, 76px) auto;
+    border: 0;
+    background: rgba(253, 243, 227, 0.22);
+  }
+
+  /* ── Footer ──────────────────────────────────────────────────────── */
+  footer {
+    padding: clamp(52px, 8vw, 88px) 0 clamp(44px, 6vw, 64px);
+    background: var(--night-2);
+    border-top: 1px solid rgba(253, 243, 227, 0.07);
+  }
+
+  .studio {
+    margin: 0 0 8px;
+    font-size: 0.84rem;
     letter-spacing: 0.26em;
     text-transform: uppercase;
-    color: rgba(255, 244, 220, 0.5);
-    line-height: 2;
+    color: rgba(253, 243, 227, 0.74);
   }
 
-  .shot__label em {
-    display: block;
-    font-style: normal;
-    letter-spacing: 0.12em;
-    font-size: 11.5px;
-    color: rgba(255, 244, 220, 0.78);
-  }
+  .studio strong { color: var(--cream); font-weight: 500; }
 
-  /* ── Offline band ─────────────────────────────────────── */
-  .band {
-    background:
-      radial-gradient(90% 130% at 12% 0%, rgba(111, 90, 168, 0.3), transparent 58%),
-      radial-gradient(80% 120% at 92% 100%, rgba(255, 158, 79, 0.18), transparent 60%),
-      var(--night-deep);
-    border-top: 1px solid var(--line);
-    border-bottom: 1px solid var(--line);
-    padding: clamp(76px, 11vw, 124px) 0;
-  }
-
-  .band__grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
-    gap: clamp(40px, 6vw, 84px);
-    align-items: center;
-  }
-  @media (max-width: 800px) {
-    .band__grid { grid-template-columns: 1fr; gap: 44px; }
-  }
-
-  .band h2 { max-width: 16ch; }
-
-  .pillars {
-    display: grid;
-    gap: 26px;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
-
-  .pillar {
-    display: grid;
-    grid-template-columns: auto 1fr;
-    gap: 18px;
-    align-items: start;
-    padding-bottom: 26px;
-    border-bottom: 1px solid rgba(255, 244, 220, 0.1);
-  }
-  .pillar:last-child { border-bottom: 0; padding-bottom: 0; }
-
-  .pillar__mark {
-    width: 30px; height: 30px;
-    display: grid;
-    place-items: center;
-    border: 1px solid rgba(255, 207, 150, 0.34);
-    border-radius: 50%;
-    color: var(--peach);
-    flex: none;
-  }
-
-  .pillar h3 {
-    margin: 0 0 7px;
-    font-size: 0.98rem;
-    font-weight: 500;
-    color: var(--cream);
-  }
-
-  .pillar p {
-    margin: 0;
-    font-size: 0.88rem;
-    line-height: 1.7;
-    color: var(--mist);
-    font-weight: 300;
-  }
-
-  /* ── Play band ────────────────────────────────────────── */
-  .play {
-    text-align: center;
-    padding: clamp(88px, 13vw, 150px) 0;
-    background:
-      radial-gradient(80% 100% at 50% 0%, rgba(255, 158, 79, 0.14), transparent 62%),
-      var(--night);
-  }
-
-  .play h2 { margin-inline: auto; max-width: 22ch; }
-  .play .lede { margin-inline: auto; }
-
-  .footnote {
-    margin: 26px 0 0;
-    font-size: 0.78rem;
-    color: rgba(168, 182, 200, 0.72);
-    letter-spacing: 0.01em;
-  }
-
-  /* ── Footer ───────────────────────────────────────────── */
-  footer {
-    border-top: 1px solid var(--line);
-    padding: 46px 0 54px;
-    background: var(--night-deep);
-  }
-
-  .foot {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 20px 40px;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .brand {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .brand img { width: 30px; height: 30px; border-radius: 7px; }
-
-  .brand__txt {
-    font-size: 10px;
-    letter-spacing: 0.27em;
-    text-transform: uppercase;
-    color: rgba(255, 244, 220, 0.62);
-    line-height: 1.9;
-  }
-
-  .brand__txt strong {
-    display: block;
-    color: var(--cream);
-    font-weight: 400;
-    letter-spacing: 0.3em;
-  }
-
-  .foot__meta {
+  .fineprint {
+    margin: 22px 0 0;
     font-size: 0.76rem;
-    color: rgba(168, 182, 200, 0.66);
     line-height: 2;
-    text-align: right;
+    color: rgba(253, 243, 227, 0.34);
   }
-  @media (max-width: 640px) {
-    .foot { justify-content: center; text-align: center; }
-    .foot__meta { text-align: center; }
-  }
-
-  .foot__meta a { color: rgba(255, 207, 150, 0.9); text-decoration: none; }
-  .foot__meta a:hover { text-decoration: underline; }
+  .fineprint a { color: rgba(255, 207, 150, 0.82); text-decoration: none; }
+  .fineprint a:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
 
-<!-- ══ Hero ═══════════════════════════════════════════════ -->
+<!-- ══ Hero: the scene, with the logotype laid over the sky ══════════ -->
 <header class="hero">
-  <div class="hero__art">
-    <img src="assets/hero.jpg" alt="A snowboarder carving down a sunlit ridge at sunset, layered violet mountains behind." fetchpriority="high" />
+  <div class="hero__lockup">
+    <p class="presents">Shadows Game Studio presents</p>
+    <h1 class="wordmark">
+      Afterglow
+      <span class="wordmark__sub">An Endless Ride</span>
+    </h1>
   </div>
-  <div class="hero__veil"></div>
 
-  <div class="hero__inner wrap">
-    <p class="eyebrow">Shadows Game Studio</p>
-    <h1>Afterglow</h1>
-    <p class="hero__tag">An endless snowboarding ride through the last light of day.</p>
-    <hr class="hero__rule" />
-
-    <div class="cta-row">
-      <a class="btn btn--primary" href="play/index.html">
-        <span class="play-dot"></span> Play in your browser
-      </a>
-      <a class="btn btn--ghost" href="#ride">See the ride</a>
-    </div>
-
-    <div class="stores">
-      <span class="chip">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3.6 2.4a1.5 1.5 0 0 0-.5 1.1v17a1.5 1.5 0 0 0 .5 1.1l9.2-9.6-9.2-9.6Zm10.6 8.3 2.8-2.9-9.4-5.3 6.6 8.2Zm0 2.6-6.6 8.2 9.4-5.3-2.8-2.9Zm6.5-3.2-2.5-1.4-3 3.3 3 3.3 2.5-1.4a1.6 1.6 0 0 0 0-2.8Z"/></svg>
-        Google Play <span class="chip__soon">Coming soon</span>
-      </span>
-      <span class="chip">
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.4 12.8c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.9-1.5-.1-2.8.8-3.5.8s-1.9-.8-3.1-.8c-1.6 0-3.1.9-3.9 2.4-1.7 2.9-.4 7.2 1.2 9.5.8 1.1 1.7 2.4 3 2.4 1.2 0 1.6-.8 3.1-.8s1.9.8 3.1.8 2.1-1.1 2.9-2.3c.9-1.3 1.3-2.6 1.3-2.7-.1 0-2.7-1-2.7-3.9ZM14.2 5.6c.7-.8 1.1-1.9 1-3-1 0-2.2.7-2.9 1.5-.6.7-1.1 1.8-1 2.9 1.1.1 2.2-.6 2.9-1.4Z"/></svg>
-        App Store <span class="chip__soon">Coming soon</span>
-      </span>
-    </div>
-
-    <a class="scroll-hint" href="#ride" aria-label="Scroll to the ride">
-      Scroll
-      <span aria-hidden="true"></span>
-    </a>
-  </div>
+  <img class="hero__scene" src="assets/hero.svg" width="1600" height="1000"
+       alt="Layered mountain ridges at dusk with a low sun and rays behind the peaks; a snowboarder carves the nearest slope."
+       fetchpriority="high" />
 </header>
 
-<!-- ══ The ride ═══════════════════════════════════════════ -->
-<section class="section section--cream" id="ride">
-  <div class="wrap">
-    <p class="kicker">The descent</p>
-    <h2>Gravity is the whole game.</h2>
+<!-- ══ The promise ══════════════════════════════════════════════════ -->
+<section class="band band--tight">
+  <div class="col">
     <p class="lede">
-      Point it downhill and let the mountain do the work. Nothing is scripted —
-      every slope is generated, and every valley bottom is somewhere to earn back
-      the height you just spent. Carry your speed out of a valley and you decide
-      how high the next mountain takes you.
+      An endless snowboarding ride through the last light of day.
+      Point it downhill and let the mountain do the rest.
     </p>
-
-    <div class="features">
-      <article class="feature">
-        <p class="feature__n">01</p>
-        <h3>Real descents</h3>
-        <p>Deep, sustained runs carved from the terrain itself — not waves of flat ground. Long falls, rounded valley floors, and climbs that fall just short of where you started.</p>
-      </article>
-      <article class="feature">
-        <p class="feature__n">02</p>
-        <h3>Crest launches</h3>
-        <p>Ride a sharp crest fast enough and the mountain lets you go. No button, no ramp — just momentum, a tangent to follow, and as much air as your speed can buy.</p>
-      </article>
-      <article class="feature">
-        <p class="feature__n">03</p>
-        <h3>Glowstones</h3>
-        <p>Collect them along the line, chain your combos, and bank the run. A clean descent pays far better than a fast, messy one.</p>
-      </article>
-      <article class="feature">
-        <p class="feature__n">04</p>
-        <h3>A journey, not a loop</h3>
-        <p>Levels string together into a run across the range, each with its own target and its own weather. Fall and you can take the mountain up on its offer to revive.</p>
-      </article>
-    </div>
   </div>
 </section>
 
-<!-- ══ Biomes ═════════════════════════════════════════════ -->
-<section class="section section--night">
-  <div class="wrap">
-    <p class="kicker">Five biomes</p>
-    <h2>Every ridge has its own light.</h2>
-    <p class="lede">
-      The range changes under you as you ride — from green foothills to snowfall,
-      to mist, to a forest lit only by the moon, and out into jungle canopy.
-    </p>
-
-    <div class="biomes">
-      <article class="biome" style="--swatch:#8fb56a">
-        <h3>Green Hills</h3>
-        <p>Warm grass, long sightlines, forgiving ground.</p>
-      </article>
-      <article class="biome" style="--swatch:#cfe4f2">
-        <h3>Snowfall Peaks</h3>
-        <p>Deep powder descents and the range's steepest drops.</p>
-      </article>
-      <article class="biome" style="--swatch:#b9c6d6">
-        <h3>Misty Mountains</h3>
-        <p>Fog swallowing the ridgelines ahead of you.</p>
-      </article>
-      <article class="biome" style="--swatch:#9b8cff">
-        <h3>Moonlit Forest</h3>
-        <p>Blue dark, glowing undergrowth, narrow lines.</p>
-      </article>
-      <article class="biome" style="--swatch:#5fbf8f">
-        <h3>Jungle Canopy</h3>
-        <p>Roots and vines under a closing green roof.</p>
-      </article>
-    </div>
-  </div>
-</section>
-
-<!-- ══ Gallery ════════════════════════════════════════════ -->
-<section class="section section--cream">
-  <div class="wrap">
-    <p class="kicker">On the mountain</p>
-    <h2>The ride, in stills.</h2>
-
-    <div class="gallery">
-      <!-- Drop real captures at assets/screens/01.jpg … 04.jpg and they appear here. -->
-      <figure class="shot" style="margin:0">
-        <img src="assets/screens/01.jpg" alt="A crest launch above the ridgeline" loading="lazy" onerror="this.remove()" />
-        <figcaption class="shot__label">Frame 01<em>Crest launch</em></figcaption>
-      </figure>
-      <figure class="shot" style="margin:0">
-        <img src="assets/screens/02.jpg" alt="A deep descent into a valley floor" loading="lazy" onerror="this.remove()" />
-        <figcaption class="shot__label">Frame 02<em>The valley floor</em></figcaption>
-      </figure>
-      <figure class="shot" style="margin:0">
-        <img src="assets/screens/03.jpg" alt="Riding through the moonlit forest" loading="lazy" onerror="this.remove()" />
-        <figcaption class="shot__label">Frame 03<em>Moonlit forest</em></figcaption>
-      </figure>
-      <figure class="shot" style="margin:0">
-        <img src="assets/screens/04.jpg" alt="Chasing glowstones across the jungle canopy" loading="lazy" onerror="this.remove()" />
-        <figcaption class="shot__label">Frame 04<em>Chasing glowstones</em></figcaption>
-      </figure>
-    </div>
-  </div>
-</section>
-
-<!-- ══ Offline band ═══════════════════════════════════════ -->
+<!-- ══ Play ═════════════════════════════════════════════════════════ -->
 <section class="band">
-  <div class="wrap band__grid">
-    <div>
-      <p class="kicker">Yours, quietly</p>
-      <h2>No account. No server. No signal needed.</h2>
-      <p class="lede">
-        Afterglow is built to be yours alone. Everything you earn stays on the
-        device in your hand — no sign-up, no cloud, nothing to lose when your
-        signal does.
-      </p>
+  <div class="col">
+    <p class="status">Play now in your browser</p>
+    <div style="margin-top:clamp(22px,4vw,34px)">
+      <a class="action" href="play/index.html">
+        <span class="action__dot"></span> Ride
+      </a>
     </div>
+    <p class="hint">No install, no account — best on a phone held sideways.</p>
+  </div>
+</section>
 
-    <ul class="pillars">
-      <li class="pillar">
-        <span class="pillar__mark" aria-hidden="true">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg>
-        </span>
-        <div>
-          <h3>Play it on a plane</h3>
-          <p>The whole game runs offline. No download on first launch, no connection checks, no waiting.</p>
-        </div>
+<hr class="rule" />
+
+<!-- ══ What it is ═══════════════════════════════════════════════════ -->
+<section class="band">
+  <div class="col">
+    <h2 class="title">The descent</h2>
+    <ul class="facts">
+      <li class="fact">
+        <h3>Real mountains, not waves</h3>
+        <p>Deep, sustained descents carved from the terrain itself — long falls, rounded valley floors, and climbs that stop just short of where you started.</p>
       </li>
-      <li class="pillar">
-        <span class="pillar__mark" aria-hidden="true">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg>
-        </span>
-        <div>
-          <h3>Progress kept on your device</h3>
-          <p>Scores, achievements and preferences live in local storage. No account ever asked for.</p>
-        </div>
+      <li class="fact">
+        <h3>Catch the crest</h3>
+        <p>Ride a sharp crest fast enough and the mountain lets you go. No button and no ramp — just momentum, a tangent to follow, and whatever air your speed can buy.</p>
       </li>
-      <li class="pillar">
-        <span class="pillar__mark" aria-hidden="true">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20 6 9 17l-5-5"/></svg>
-        </span>
-        <div>
-          <h3>Nothing following you home</h3>
-          <p>No analytics on this page, and no tracking in the game beyond the ads that keep it free.</p>
-        </div>
+      <li class="fact">
+        <h3>Chase the glowstones</h3>
+        <p>Chain them along your line, build the combo, and bank the run. A clean descent always pays better than a fast, messy one.</p>
+      </li>
+      <li class="fact">
+        <h3>One long ride</h3>
+        <p>Levels string together into a journey across the range — green hills, snowfall, mist, a moonlit forest, jungle canopy — each with its own target and weather.</p>
       </li>
     </ul>
   </div>
 </section>
 
-<!-- ══ Play ═══════════════════════════════════════════════ -->
-<section class="play">
-  <div class="wrap">
-    <p class="kicker">Ready when you are</p>
-    <h2>Take the mountain for a ride.</h2>
+<hr class="rule" />
+
+<!-- ══ Screens ══════════════════════════════════════════════════════ -->
+<section class="band">
+  <div class="col">
+    <h2 class="title">On the mountain</h2>
+  </div>
+
+  <div class="screens">
+    <!-- Drop captures at assets/screens/01.jpg … 04.jpg and they appear here. -->
+    <figure class="screen">
+      <img src="assets/screens/01.jpg" alt="A crest launch above the ridgeline" loading="lazy" onerror="this.remove()" />
+      <figcaption class="screen__cap">Frame 01<b>Crest launch</b></figcaption>
+    </figure>
+    <figure class="screen">
+      <img src="assets/screens/02.jpg" alt="A deep descent opening onto the valley floor" loading="lazy" onerror="this.remove()" />
+      <figcaption class="screen__cap">Frame 02<b>The valley floor</b></figcaption>
+    </figure>
+    <figure class="screen">
+      <img src="assets/screens/03.jpg" alt="Riding through the moonlit forest" loading="lazy" onerror="this.remove()" />
+      <figcaption class="screen__cap">Frame 03<b>Moonlit forest</b></figcaption>
+    </figure>
+    <figure class="screen">
+      <img src="assets/screens/04.jpg" alt="Glowstones chained across the jungle canopy" loading="lazy" onerror="this.remove()" />
+      <figcaption class="screen__cap">Frame 04<b>Jungle canopy</b></figcaption>
+    </figure>
+  </div>
+</section>
+
+<hr class="rule" />
+
+<!-- ══ Offline ══════════════════════════════════════════════════════ -->
+<section class="band">
+  <div class="col">
+    <h2 class="title">No account. No signal needed.</h2>
     <p class="lede">
-      The full game runs right here in your browser — no install, no account.
-      Best on a phone held sideways, or a desktop with the arrow keys.
-    </p>
-
-    <div class="cta-row">
-      <a class="btn btn--primary" href="play/index.html">
-        <span class="play-dot"></span> Ride now
-      </a>
-    </div>
-
-    <p class="footnote">
-      Native builds for Google Play and the App Store are on the way.
+      The whole game runs offline. Scores, achievements and preferences stay in
+      local storage on your own device — nothing is asked of you, and nothing
+      leaves the mountain.
     </p>
   </div>
 </section>
 
-<!-- ══ Footer ═════════════════════════════════════════════ -->
-<footer>
-  <div class="wrap foot">
-    <div class="brand">
-      <img src="assets/icon-192.png" alt="" width="30" height="30" loading="lazy" />
-      <span class="brand__txt">
-        <strong>Afterglow</strong>
-        Shadows Game Studio
+<hr class="rule" />
+
+<!-- ══ Stores ═══════════════════════════════════════════════════════ -->
+<section class="band">
+  <div class="col">
+    <p class="status">Coming soon to iOS &amp; Android</p>
+    <p class="hint" style="margin-top:14px">Until then, it plays right here.</p>
+
+    <div class="stores" style="margin-top:clamp(22px,4vw,32px)">
+      <span class="store">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3.6 2.4a1.5 1.5 0 0 0-.5 1.1v17a1.5 1.5 0 0 0 .5 1.1l9.2-9.6-9.2-9.6Zm10.6 8.3 2.8-2.9-9.4-5.3 6.6 8.2Zm0 2.6-6.6 8.2 9.4-5.3-2.8-2.9Zm6.5-3.2-2.5-1.4-3 3.3 3 3.3 2.5-1.4a1.6 1.6 0 0 0 0-2.8Z"/></svg>
+        Google Play <em>Soon</em>
+      </span>
+      <span class="store">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M16.4 12.8c0-2.3 1.9-3.4 2-3.5-1.1-1.6-2.8-1.8-3.4-1.9-1.5-.1-2.8.8-3.5.8s-1.9-.8-3.1-.8c-1.6 0-3.1.9-3.9 2.4-1.7 2.9-.4 7.2 1.2 9.5.8 1.1 1.7 2.4 3 2.4 1.2 0 1.6-.8 3.1-.8s1.9.8 3.1.8 2.1-1.1 2.9-2.3c.9-1.3 1.3-2.6 1.3-2.7-.1 0-2.7-1-2.7-3.9ZM14.2 5.6c.7-.8 1.1-1.9 1-3-1 0-2.2.7-2.9 1.5-.6.7-1.1 1.8-1 2.9 1.1.1 2.2-.6 2.9-1.4Z"/></svg>
+        App Store <em>Soon</em>
       </span>
     </div>
+  </div>
+</section>
 
-    <p class="foot__meta">
-      v1.0.0 · Snowboarding<br />
+<!-- ══ Footer ═══════════════════════════════════════════════════════ -->
+<footer>
+  <div class="col">
+    <p class="studio">Built by <strong>Shadows Game Studio</strong></p>
+    <p class="fineprint">
+      Afterglow v1.0.0 · Snowboarding<br />
       <a href="mailto:hello@example.com">hello@example.com</a>
     </p>
   </div>
