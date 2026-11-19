@@ -192,6 +192,76 @@ export function alphaColor(color: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
+/**
+ * Phase 16 — global tone grade.
+ *
+ * Afterglow's art direction is dusk: the world sits under a deep navy sky
+ * rather than midday brightness. Rather than re-tuning every palette stop in
+ * every theme, every colour passes through one grade on the way out, using
+ * the same curve across sky, ground, snow, parallax and weather so nothing
+ * desynchronises when themes cross-fade.
+ *
+ * Values are 0..1 multipliers/clamps in linear sRGB terms:
+ *  - `gain`   scales every channel, pulling the whole world down
+ *  - `floor`  is added back after the scale so shadow detail survives instead
+ *             of crushing to black
+ *  - `ceiling` is the lightness clamp: nothing in the world draws brighter
+ *             than this, which is what stops snow reading as white paper
+ *  - blue/green get slightly gentler treatment than red, which warms the
+ *             shadows and keeps the dusk cast instead of turning everything
+ *             grey
+ */
+export const TONE_GRADE = {
+  gain: { r: 0.72, g: 0.755, b: 0.80 },
+  floor: { r: 5, g: 6, b: 10 },
+  ceiling: { r: 196, g: 203, b: 214 },
+  /** Blend against the graded value; 1 = fully graded. */
+  strength: 1,
+  /** Darkening multiplier applied to palette.night so the cycle still reads. */
+  nightBoost: 1.12,
+} as const;
+
+function gradeChannel(value: number, axis: 'r' | 'g' | 'b'): number {
+  const graded = value * TONE_GRADE.gain[axis] + TONE_GRADE.floor[axis];
+  return Math.min(graded, TONE_GRADE.ceiling[axis]);
+}
+
+/** Apply the dusk grade to a single colour string, keeping its format. */
+export function toneGrade(color: string, strength: number = TONE_GRADE.strength): string {
+  // Fully-graded results are the hot path (every palette colour, every frame),
+  // and they repeat constantly because palettes come from a fixed stop table —
+  // so memoise them. Partial strengths are rare (glow/moon accents) and cheap.
+  if (strength >= 1) {
+    const hit = GRADE_CACHE.get(color);
+    if (hit !== undefined) return hit;
+    const [r, g, b] = parseColor(color);
+    const graded = `rgb(${Math.round(gradeChannel(r, 'r'))}, ${Math.round(gradeChannel(g, 'g'))}, ${Math.round(gradeChannel(b, 'b'))})`;
+    if (GRADE_CACHE.size < 512) GRADE_CACHE.set(color, graded);
+    return graded;
+  }
+  const [r, g, b] = parseColor(color);
+  const amount = Math.max(0, Math.min(1, strength));
+  const mixTo = (value: number, axis: 'r' | 'g' | 'b') => Math.round(lerp(value, gradeChannel(value, axis), amount));
+  return `rgb(${mixTo(r, 'r')}, ${mixTo(g, 'g')}, ${mixTo(b, 'b')})`;
+}
+
+const GRADE_CACHE = new Map<string, string>();
+
+function gradePalette(palette: Palette): Palette {
+  return {
+    top: toneGrade(palette.top),
+    horizon: toneGrade(palette.horizon),
+    far: toneGrade(palette.far),
+    middle: toneGrade(palette.middle),
+    near: toneGrade(palette.near),
+    snow: toneGrade(palette.snow),
+    snowShade: toneGrade(palette.snowShade),
+    glow: toneGrade(palette.glow, 0.72),
+    moon: toneGrade(palette.moon, 0.5),
+    night: Math.min(1, palette.night * TONE_GRADE.nightBoost),
+  };
+}
+
 function paletteFor(def: EnvironmentDefinition, phase: number): Palette {
   const value = ((phase % 1) + 1) % 1;
   const stops = def.stops;
@@ -1036,8 +1106,12 @@ export class EnvironmentManager {
 
   palette(phase: number): Palette {
     const from = paletteFor(this.from.def, phase);
-    if (!this.to) return from;
-    return mixPalette(from, paletteFor(this.to.def, phase), smoothstep(this.blend));
+    const raw = this.to
+      ? mixPalette(from, paletteFor(this.to.def, phase), smoothstep(this.blend))
+      : from;
+    // Phase 16 — one grade, applied after the theme cross-fade so both themes
+    // darken identically and the dusk cast never pops mid-transition.
+    return gradePalette(raw);
   }
 
   weatherEffects(): WeatherEffectConfig[] {
