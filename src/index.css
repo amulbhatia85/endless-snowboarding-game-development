@@ -1340,16 +1340,42 @@ kbd {
 .screen-menu .brand-subtitle { color: rgba(239, 240, 231, 0.5); }
 .screen-menu .best-readout { color: rgba(239, 240, 231, 0.5); }
 
-/* Buttons read as deep glass on the dark field rather than pale cards. */
-.screen-menu .menu-button {
+/* Buttons read as deep glass on the dark field rather than pale cards.
+   NOTE: these are two-class selectors, so they outrank the single-class
+   .menu-play / .menu-play:hover rules further up the file. Play is therefore
+   pinned explicitly below — without that, Play keeps its dark navy text but
+   loses its amber fill and the label vanishes into the dark background. */
+.screen-menu .menu-button:not(.menu-play) {
   border-color: rgba(245, 242, 232, 0.13);
   background: linear-gradient(135deg, rgba(7, 18, 30, 0.78), rgba(9, 21, 34, 0.58));
   box-shadow: 0 16px 38px rgba(3, 9, 16, 0.34);
 }
-.screen-menu .menu-button:is(:hover, :active, :focus-visible) {
+.screen-menu .menu-button:not(.menu-play):is(:hover, :active, :focus-visible) {
   background: #0d2033;
 }
-.screen-menu .menu-button small { color: rgba(245, 242, 233, 0.53); }
+.screen-menu .menu-button:not(.menu-play) small { color: rgba(245, 242, 233, 0.53); }
+
+/* Play keeps its amber fill as the one primary action, with the label set
+   white for maximum separation from the gold. */
+.screen-menu .menu-play {
+  border-color: rgba(255, 223, 169, 0.66);
+  background: linear-gradient(135deg, #f0c896, #e0a86c);
+  box-shadow: 0 16px 40px rgba(240, 200, 150, 0.22), 0 3px 10px rgba(3, 9, 16, 0.4);
+}
+.screen-menu .menu-play strong {
+  color: #ffffff;
+  text-shadow: 0 1px 2px rgba(96, 61, 20, 0.45);
+}
+.screen-menu .menu-play small {
+  color: rgba(255, 255, 255, 0.82);
+  text-shadow: 0 1px 2px rgba(96, 61, 20, 0.3);
+}
+.screen-menu .menu-play .button-arrow { border-color: rgba(255, 255, 255, 0.42); color: #ffffff; }
+.screen-menu .menu-button.menu-play:is(:hover, :active, :focus-visible) {
+  background: linear-gradient(135deg, #ffd9a8, #eeb377);
+}
+.screen-menu .menu-button.menu-play:is(:hover, :active, :focus-visible) strong { color: #ffffff; }
+
 .screen-menu .menu-mini-row button { color: rgba(245, 242, 233, 0.66); }
 .screen-menu .menu-studio-line { color: rgba(245, 242, 233, 0.5); }
 
