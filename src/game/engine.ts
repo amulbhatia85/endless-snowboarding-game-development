@@ -4432,6 +4432,23 @@ export class SnowGameEngine {
     context.save();
     context.translate(x, y);
 
+    // Phase 17 — a warm pool of light on the snow around the rider. Drawn in
+    // screen space, before the rotation and the 0.5 sprite scale, so it keeps a
+    // fixed, generous size instead of shrinking with the sprite. This is what
+    // makes the rider findable at a glance on a busy slope; the rim above only
+    // sharpens the silhouette once your eye is there.
+    context.save();
+    const poolRadius = 46;
+    const pool = context.createRadialGradient(0, 2, 2, 0, 2, poolRadius);
+    pool.addColorStop(0, 'rgba(255, 246, 226, 0.34)');
+    pool.addColorStop(0.45, 'rgba(255, 240, 208, 0.17)');
+    pool.addColorStop(1, 'rgba(255, 236, 200, 0)');
+    context.fillStyle = pool;
+    context.beginPath();
+    context.arc(0, 2, poolRadius, 0, TAU);
+    context.fill();
+    context.restore();
+
     if (grounded) {
       context.fillStyle = 'rgba(26,48,65,0.18)';
       context.beginPath();
@@ -4567,12 +4584,19 @@ export class SnowGameEngine {
     const { mask, glow, backdrop, maskContext, glowContext, backdropContext } = outline;
     this.drawRiderBodyMask(maskContext, grounded, idle, airTime, bob);
 
+    // NOTE ON RADII: this whole block runs inside the rider's own transform,
+    // which is scaled by BIKE_SCALE (0.5). Every blur radius below therefore
+    // reads at half its value on screen, which is why the rim was invisible at
+    // 10-13px — it landed as 2px. The radii here are sized in mask pixels to
+    // produce a ~9px screen rim and a ~26px screen bleed.
+
     // Dark pool first: the halo's contrast partner where the ground is bright.
     backdropContext.clearRect(0, 0, 192, 192);
     backdropContext.save();
-    backdropContext.shadowColor = '#0a1523';
-    backdropContext.shadowBlur = 11;
+    backdropContext.shadowColor = '#08111d';
+    backdropContext.shadowBlur = 22;
     backdropContext.shadowOffsetX = 192;
+    backdropContext.drawImage(mask, -192, 0);
     backdropContext.drawImage(mask, -192, 0);
     backdropContext.restore();
     backdropContext.save();
@@ -4584,12 +4608,16 @@ export class SnowGameEngine {
     // separated on dark ground and still crisp on bright ground.
     glowContext.clearRect(0, 0, 192, 192);
     glowContext.save();
-    glowContext.shadowColor = '#ffeccf';
-    glowContext.shadowBlur = 13;
+    glowContext.shadowColor = '#ffffff';
+    glowContext.shadowBlur = 54;
     glowContext.shadowOffsetX = 192;
     glowContext.drawImage(mask, -192, 0);
     glowContext.drawImage(mask, -192, 0);
-    glowContext.shadowBlur = 4;
+    glowContext.drawImage(mask, -192, 0);
+    glowContext.shadowBlur = 26;
+    glowContext.drawImage(mask, -192, 0);
+    glowContext.drawImage(mask, -192, 0);
+    glowContext.shadowBlur = 12;
     glowContext.drawImage(mask, -192, 0);
     glowContext.drawImage(mask, -192, 0);
     glowContext.restore();
@@ -4599,9 +4627,9 @@ export class SnowGameEngine {
     glowContext.restore();
 
     context.save();
-    context.globalAlpha *= 0.5;
+    context.globalAlpha *= 0.62;
     context.drawImage(backdrop, -96, -140);
-    context.globalAlpha = (context.globalAlpha / 0.5) * 0.72;
+    context.globalAlpha = (context.globalAlpha / 0.62) * 1;
     context.drawImage(glow, -96, -140);
     context.restore();
   }
