@@ -1,1 +1,11 @@
 node_modules/
+
+# Android Studio local settings
+/android/.idea/
+
+# Android release outputs and local signing files
+/android/app/release/
+
+# Signing keys
+*.jks
+*.keystore
