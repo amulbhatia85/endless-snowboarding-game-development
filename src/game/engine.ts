@@ -4432,6 +4432,23 @@ export class SnowGameEngine {
     context.save();
     context.translate(x, y);
 
+    // Phase 17 — a warm pool of light on the snow around the rider. Drawn in
+    // screen space, before the rotation and the 0.5 sprite scale, so it keeps a
+    // fixed, generous size instead of shrinking with the sprite. This is what
+    // makes the rider findable at a glance on a busy slope; the rim above only
+    // sharpens the silhouette once your eye is there.
+    context.save();
+    const poolRadius = 46;
+    const pool = context.createRadialGradient(0, 2, 2, 0, 2, poolRadius);
+    pool.addColorStop(0, 'rgba(255, 246, 226, 0.34)');
+    pool.addColorStop(0.45, 'rgba(255, 240, 208, 0.17)');
+    pool.addColorStop(1, 'rgba(255, 236, 200, 0)');
+    context.fillStyle = pool;
+    context.beginPath();
+    context.arc(0, 2, poolRadius, 0, TAU);
+    context.fill();
+    context.restore();
+
     if (grounded) {
       context.fillStyle = 'rgba(26,48,65,0.18)';
       context.beginPath();
@@ -4502,6 +4519,9 @@ export class SnowGameEngine {
     context.lineTo(21, -34);
     context.stroke();
 
+    // Phase 17 — the separation halo is always on: it is what keeps the dark
+    // rider readable against graded-dark snow, not a power-up effect.
+    this.drawRiderHalo(context, grounded, idle, airTime, bob);
     if (strength > 0) this.drawRiderOutline(context, grounded, idle, airTime, strength, bob);
     this.drawRiderBody(context, grounded, idle, airTime, bob);
     context.restore();
@@ -4511,23 +4531,28 @@ export class SnowGameEngine {
   private riderOutline?: {
     mask: HTMLCanvasElement;
     glow: HTMLCanvasElement;
+    backdrop: HTMLCanvasElement;
     maskContext: CanvasRenderingContext2D;
     glowContext: CanvasRenderingContext2D;
+    backdropContext: CanvasRenderingContext2D;
   };
 
-  private drawRiderOutline(context: CanvasRenderingContext2D, grounded: boolean, idle: boolean, airTime: number, strength: number, bob = 0): void {
-    if (!this.riderOutline) {
-      const mask = document.createElement('canvas');
-      const glow = document.createElement('canvas');
-      mask.width = glow.width = 192;
-      mask.height = glow.height = 192;
-      const maskContext = mask.getContext('2d');
-      const glowContext = glow.getContext('2d');
-      if (!maskContext || !glowContext) return;
-      this.riderOutline = { mask, glow, maskContext, glowContext };
-    }
-
-    const { mask, glow, maskContext, glowContext } = this.riderOutline;
+  /**
+   * Phase 17 — rider separation halo.
+   *
+   * The rider is a dark silhouette and the snow beneath it is now graded dark
+   * too, so on pale terrain the two collided. Every frame the rider's own body
+   * is redrawn into an offscreen mask, and that mask becomes two things:
+   *
+   *  - `halo`: a soft white rim bled outward from the body (drawn *behind* it,
+   *    so the silhouette keeps its shape and only gains a lit edge)
+   *  - `backdrop`: a faint dark pool cast just outside the halo, which gives
+   *    the light rim something to sit against when the snow itself is bright
+   *
+   * Both are built from the same mask, so they stay perfectly registered with
+   * the body through bobs, tucks and flips without duplicating any geometry.
+   */
+  private drawRiderBodyMask(maskContext: CanvasRenderingContext2D, grounded: boolean, idle: boolean, airTime: number, bob = 0): void {
     maskContext.clearRect(0, 0, 192, 192);
     maskContext.save();
     maskContext.translate(96, 140);
@@ -4535,6 +4560,85 @@ export class SnowGameEngine {
     maskContext.lineJoin = 'round';
     this.drawRiderBody(maskContext, grounded, idle, airTime, bob);
     maskContext.restore();
+  }
+
+  private ensureRiderOutline(): NonNullable<SnowGameEngine['riderOutline']> | null {
+    if (this.riderOutline) return this.riderOutline;
+    const mask = document.createElement('canvas');
+    const glow = document.createElement('canvas');
+    const backdrop = document.createElement('canvas');
+    mask.width = glow.width = backdrop.width = 192;
+    mask.height = glow.height = backdrop.height = 192;
+    const maskContext = mask.getContext('2d');
+    const glowContext = glow.getContext('2d');
+    const backdropContext = backdrop.getContext('2d');
+    if (!maskContext || !glowContext || !backdropContext) return null;
+    this.riderOutline = { mask, glow, backdrop, maskContext, glowContext, backdropContext };
+    return this.riderOutline;
+  }
+
+  /** The always-on separation halo that keeps the rider legible on the snow. */
+  private drawRiderHalo(context: CanvasRenderingContext2D, grounded: boolean, idle: boolean, airTime: number, bob = 0): void {
+    const outline = this.ensureRiderOutline();
+    if (!outline) return;
+    const { mask, glow, backdrop, maskContext, glowContext, backdropContext } = outline;
+    this.drawRiderBodyMask(maskContext, grounded, idle, airTime, bob);
+
+    // NOTE ON RADII: this whole block runs inside the rider's own transform,
+    // which is scaled by BIKE_SCALE (0.5). Every blur radius below therefore
+    // reads at half its value on screen, which is why the rim was invisible at
+    // 10-13px — it landed as 2px. The radii here are sized in mask pixels to
+    // produce a ~9px screen rim and a ~26px screen bleed.
+
+    // Dark pool first: the halo's contrast partner where the ground is bright.
+    backdropContext.clearRect(0, 0, 192, 192);
+    backdropContext.save();
+    backdropContext.shadowColor = '#08111d';
+    backdropContext.shadowBlur = 22;
+    backdropContext.shadowOffsetX = 192;
+    backdropContext.drawImage(mask, -192, 0);
+    backdropContext.drawImage(mask, -192, 0);
+    backdropContext.restore();
+    backdropContext.save();
+    backdropContext.globalCompositeOperation = 'destination-out';
+    backdropContext.drawImage(mask, 0, 0);
+    backdropContext.restore();
+
+    // Light rim: a wide soft bleed plus a tight bright edge, so the rider is
+    // separated on dark ground and still crisp on bright ground.
+    glowContext.clearRect(0, 0, 192, 192);
+    glowContext.save();
+    glowContext.shadowColor = '#ffffff';
+    glowContext.shadowBlur = 54;
+    glowContext.shadowOffsetX = 192;
+    glowContext.drawImage(mask, -192, 0);
+    glowContext.drawImage(mask, -192, 0);
+    glowContext.drawImage(mask, -192, 0);
+    glowContext.shadowBlur = 26;
+    glowContext.drawImage(mask, -192, 0);
+    glowContext.drawImage(mask, -192, 0);
+    glowContext.shadowBlur = 12;
+    glowContext.drawImage(mask, -192, 0);
+    glowContext.drawImage(mask, -192, 0);
+    glowContext.restore();
+    glowContext.save();
+    glowContext.globalCompositeOperation = 'destination-out';
+    glowContext.drawImage(mask, 0, 0);
+    glowContext.restore();
+
+    context.save();
+    context.globalAlpha *= 0.62;
+    context.drawImage(backdrop, -96, -140);
+    context.globalAlpha = (context.globalAlpha / 0.62) * 1;
+    context.drawImage(glow, -96, -140);
+    context.restore();
+  }
+
+  private drawRiderOutline(context: CanvasRenderingContext2D, grounded: boolean, idle: boolean, airTime: number, strength: number, bob = 0): void {
+    const outline = this.ensureRiderOutline();
+    if (!outline) return;
+    const { mask, glow, maskContext, glowContext } = outline;
+    this.drawRiderBodyMask(maskContext, grounded, idle, airTime, bob);
 
     glowContext.clearRect(0, 0, 192, 192);
     glowContext.save();

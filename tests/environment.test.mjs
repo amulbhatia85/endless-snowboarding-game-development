@@ -191,7 +191,16 @@ test('Environment palettes carry each theme identity and wrap continuously at th
 
   environment.setLevel(generateLevel(2, 42));
   const snowy = environment.palette(0.4);
-  assert.ok(channels(snowy.snow).every((value) => value > 225), 'snowy mountains ground must be near-white');
+  // Phase 16 — the whole world now passes through the dusk tone grade, so snow
+  // under this light is blue-grey rather than paper-white. What must survive is
+  // the theme *identity*: snowy ground is still the brightest and most neutral
+  // ground in the game, clearly separated from every other theme.
+  const snowyChannels = channels(snowy.snow);
+  assert.ok(snowyChannels.every((value) => value > 170), `snowy mountains ground stays bright (${snowy.snow})`);
+  assert.ok(
+    Math.max(...snowyChannels) - Math.min(...snowyChannels) <= 40,
+    `snowy mountains ground stays near-neutral (${snowy.snow})`,
+  );
   assert.ok(environment.weatherEffects().some((effect) => effect.kind === 'snow' && effect.intensity > 0.3));
 
   environment.setLevel(generateLevel(3, 42));

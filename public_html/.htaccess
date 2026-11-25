@@ -1,0 +1,47 @@
+# ── Afterglow landing page — Hostinger (Apache / LiteSpeed) ──
+# Drop the CONTENTS of this folder into public_html.
+# Nothing here needs Node, PHP, a database or a build step.
+
+# Serve index.html by default
+DirectoryIndex index.html
+
+# ── Compression ───────────────────────────────────────────
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/plain text/css text/xml
+  AddOutputFilterByType DEFLATE application/javascript application/json
+  AddOutputFilterByType DEFLATE image/svg+xml
+</IfModule>
+
+# ── Caching ───────────────────────────────────────────────
+# Art and the game bundle never change name, so a short cache keeps
+# repeat visits fast without stranding anyone on an old build.
+<IfModule mod_expires.c>
+  ExpiresActive On
+  ExpiresByType text/html                 "access plus 0 seconds"
+  ExpiresByType image/jpeg                "access plus 7 days"
+  ExpiresByType image/png                 "access plus 7 days"
+  ExpiresByType image/svg+xml             "access plus 7 days"
+</IfModule>
+
+<IfModule mod_headers.c>
+  # The game is one self-contained file; keep deployments honest.
+  <FilesMatch "\.html$">
+    Header set Cache-Control "public, max-age=0, must-revalidate"
+  </FilesMatch>
+
+  # A little hardening that costs nothing on shared hosting.
+  Header set X-Content-Type-Options "nosniff"
+  Header set Referrer-Policy "strict-origin-when-cross-origin"
+
+  # The game runs as WebGL/canvas only — it needs no camera, mic or geolocation.
+  Header set Permissions-Policy "geolocation=(), microphone=(), camera=()"
+</IfModule>
+
+# ── Friendly 404 ──────────────────────────────────────────
+ErrorDocument 404 /index.html
+
+# ── Correct types (some shared hosts ship stale mime.types) ──
+<IfModule mod_mime.c>
+  AddType image/svg+xml .svg
+  AddType application/javascript .js
+</IfModule>
